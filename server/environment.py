@@ -12,19 +12,19 @@ Perfect for testing HTTP server infrastructure.
 """
 
 from uuid import uuid4
+import random
 
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
 try:
-    from ..models import Ko2cubeAction, Ko2cubeObservation
+    from models import Ko2cubeAction, Ko2cubeObservation, Ko2cubeState, Job, RegionInfo, CarbonData, PriceData
 except ImportError:
-    from models import Ko2cubeAction, Ko2cubeObservation
-
+    from models import Ko2cubeAction, Ko2cubeObservation, Ko2cubeState, Job, RegionInfo, CarbonData, PriceData
 
 class Ko2cubeEnvironment(Environment):
     """
-    A simple echo environment that echoes back messages.
+    Ko2cube: A carbon-aware cloud job scheduler environment.
 
     This environment is designed for testing the HTTP server infrastructure.
     It maintains minimal state and simply echoes back whatever message it receives.
@@ -47,50 +47,40 @@ class Ko2cubeEnvironment(Environment):
 
     def __init__(self):
         """Initialize the ko2cube_env environment."""
-        self._state = State(episode_id=str(uuid4()), step_count=0)
+        self._state = Ko2cubeState(episode_id=str(uuid4()), step_count=0)
         self._reset_count = 0
 
     def reset(self) -> Ko2cubeObservation:
         """
         Reset the environment.
-
-        Returns:
-            Ko2cubeObservation with a ready message
         """
-        self._state = State(episode_id=str(uuid4()), step_count=0)
+        self._state = Ko2cubeState(episode_id=str(uuid4()), step_count=0)
         self._reset_count += 1
 
         return Ko2cubeObservation(
-            echoed_message="Ko2cube Env environment ready!",
-            message_length=0,
+            current_step=0,
+            job_queue=[],
+            active_jobs=[],
+            regions={},
             done=False,
             reward=0.0,
+            metadata={"msg": "Environment reset"}
         )
 
     def step(self, action: Ko2cubeAction) -> Ko2cubeObservation:  # type: ignore[override]
         """
-        Execute a step in the environment by echoing the message.
-
-        Args:
-            action: Ko2cubeAction containing the message to echo
-
-        Returns:
-            Ko2cubeObservation with the echoed message and its length
+        Execute a scheduling step in the environment.
         """
         self._state.step_count += 1
 
-        message = action.message
-        length = len(message)
-
-        # Simple reward: longer messages get higher rewards
-        reward = length * 0.1
-
         return Ko2cubeObservation(
-            echoed_message=message,
-            message_length=length,
+            current_step=self._state.step_count,
+            job_queue=[],
+            active_jobs=[],
+            regions={},
             done=False,
-            reward=reward,
-            metadata={"original_message": message, "step": self._state.step_count},
+            reward=0.0,
+            metadata={"msg": "Step executed"},
         )
 
     @property

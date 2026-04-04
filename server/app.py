@@ -36,11 +36,11 @@ except Exception as e:  # pragma: no cover
     ) from e
 
 try:
-    from ..models import Ko2cubeAction, Ko2cubeObservation
-    from .environment import Ko2cubeEnvironment
+    from models import Ko2cubeAction, Ko2cubeObservation
+    from environment import Ko2cubeEnvironment
 except ImportError:
     # Fallback for running directly
-    from models import Ko2cubeAction, Ko2cubeObservation
+    from server.models import Ko2cubeAction, Ko2cubeObservation
     from server.environment import Ko2cubeEnvironment
 
 
