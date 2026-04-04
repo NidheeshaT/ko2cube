@@ -14,8 +14,7 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 
 [project.scripts]
-server = "ko2cube.server.app:main"
-
+server = "server.app:main"
