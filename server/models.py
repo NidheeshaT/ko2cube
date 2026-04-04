@@ -23,13 +23,16 @@ class RegionInfo(BaseModel):
         ..., description="Free compute slots in this region right now"
     )
 
+ALWAYS_ON: int = -1  # sentinel for never-expiring jobs
+
 class Job(BaseModel):
     job_id: str = Field(..., description="Unique identifier for the job")
+    arrival_step: int = Field(default=0, description="Step at which this job appears in the queue")
     eta_minutes: Optional[int] = Field(None, description="Expected runtime in minutes. Null if always-on.")
     cpu_cores: float = Field(..., description="CPU cores required")
     memory_gb: float = Field(..., description="Memory required in GB")
     sla_start: int = Field(..., description="Earliest simulation step the job can begin")
-    sla_end: int = Field(..., description="Latest simulation step the job must finish by")
+    sla_end: int = Field(..., description="Latest step the job must finish. -1 (ALWAYS_ON) means never expires.")
     delay_tolerant: bool = Field(..., description="Whether the job can wait for a better carbon window without failing")
     instance_preference: Literal["spot", "on-demand"] = Field(..., description="Preferred instance lifecycle")
     
