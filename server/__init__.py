@@ -6,6 +6,5 @@
 
 """Ko2cube Env environment server components."""
 
-from .environment import Ko2cubeEnvironment
-
-__all__ = ["Ko2cubeEnvironment"]
+import os
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
