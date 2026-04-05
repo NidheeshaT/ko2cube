@@ -13,10 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List
 
-try:
-    from models import Job, ALWAYS_ON
-except ImportError:
-    from server.models import Job, ALWAYS_ON
+from models import Job, ALWAYS_ON
 
 # Scenario dataclass
 @dataclass

@@ -47,6 +47,7 @@ DEFER_CLEAN_ALREADY_PENALTY = -0.3  # deferred when carbon is already below aver
 
 # Cost signal
 COST_REWARD_SCALE        = 1.0    # multiplier on fractional saving below regional average
+RIGHT_SIZING_WASTE_SCALE = 1.5    # multiplier on the dollar amount wasted (vs cheapest valid instance)
 
 # Terminal multipliers
 TERMINAL_COMPLETION_BONUS  = +3.0
@@ -139,6 +140,7 @@ class RewardBreakdown:
     sla: float = 0.0
     carbon: float = 0.0
     cost: float = 0.0
+    waste: float = 0.0
     shaping: float = 0.0
     terminal: float = 0.0
     components: Dict[str, float] = field(default_factory=dict)
@@ -146,13 +148,14 @@ class RewardBreakdown:
     @property
     def total(self) -> float:
         return (self.sla + self.carbon + self.cost
-                + self.shaping + self.terminal)
+                + self.waste + self.shaping + self.terminal)
 
     def to_dict(self) -> Dict[str, float]:
         return {
             "sla":       round(self.sla, 4),
             "carbon":    round(self.carbon, 4),
             "cost":      round(self.cost, 4),
+            "waste":     round(self.waste, 4),
             "shaping":   round(self.shaping, 4),
             "terminal":  round(self.terminal, 4),
             "total":     round(self.total, 4),
@@ -270,6 +273,29 @@ def compute_step_reward(
                     rb.cost += cost_signal
                     rb.components[f"cost_frac_{job.job_id}"] = round(cost_saving_frac, 3)
                     rb.components[f"cost_signal_{job.job_id}"] = round(cost_signal, 4)
+
+                # Waste (Over-provisioning)
+                # Calculate what the cheapest valid instance would have cost in this region
+                if region_info:
+                    valid_instances = [
+                        inst for inst in region_info.available_instances
+                        if inst.cpu_cores >= job.cpu_cores and inst.memory_gb >= job.memory_gb
+                    ]
+                    if valid_instances:
+                        runtime_hours = job.eta_minutes / 60.0
+                        # Find the cheapest price (using the same machine_type preference)
+                        ideal_unit_price = min(
+                            inst.spot_price if assignment.machine_type == "spot" else inst.on_demand_price
+                            for inst in valid_instances
+                        )
+                        ideal_cost = ideal_unit_price * runtime_hours
+                        
+                        if agent_cost > ideal_cost:
+                            waste_dollars = agent_cost - ideal_cost
+                            waste_penalty = -waste_dollars * RIGHT_SIZING_WASTE_SCALE
+                            rb.waste += waste_penalty
+                            rb.components[f"waste_penalty_{job.job_id}"] = round(waste_penalty, 4)
+                            rb.components[f"oversize_dollars_{job.job_id}"] = round(waste_dollars, 4)
 
                 # Penalty: used spot for an always-on job (eviction risk)
                 if is_always_on and assignment.machine_type == "spot":

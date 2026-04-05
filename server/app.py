@@ -35,13 +35,8 @@ except Exception as e:  # pragma: no cover
         "openenv is required for the web interface. Install dependencies with '\n    uv sync\n'"
     ) from e
 
-try:
-    from models import Ko2cubeAction, Ko2cubeObservation
-    from environment import Ko2cubeEnvironment
-except ImportError:
-    # Fallback for running directly
-    from server.models import Ko2cubeAction, Ko2cubeObservation
-    from server.environment import Ko2cubeEnvironment
+from models import Ko2cubeAction, Ko2cubeObservation
+from environment import Ko2cubeEnvironment
 
 
 # Create the app with web interface and README integration
