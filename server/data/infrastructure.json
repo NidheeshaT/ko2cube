@@ -1,0 +1,45 @@
+{
+    "regions": [
+        "us-east-1",
+        "us-west-2",
+        "eu-west-1"
+    ],
+    "instances": [
+        {
+            "name": "m5.large",
+            "cpu": 2,
+            "mem": 8,
+            "on_demand": 0.096
+        },
+        {
+            "name": "m5.xlarge",
+            "cpu": 4,
+            "mem": 16,
+            "on_demand": 0.192
+        },
+        {
+            "name": "m5.2xlarge",
+            "cpu": 8,
+            "mem": 32,
+            "on_demand": 0.384
+        },
+        {
+            "name": "c5.large",
+            "cpu": 2,
+            "mem": 4,
+            "on_demand": 0.085
+        },
+        {
+            "name": "c5.xlarge",
+            "cpu": 4,
+            "mem": 8,
+            "on_demand": 0.17
+        },
+        {
+            "name": "r5.large",
+            "cpu": 2,
+            "mem": 16,
+            "on_demand": 0.126
+        }
+    ]
+}
