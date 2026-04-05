@@ -17,10 +17,7 @@ import random
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
-try:
-    from models import Ko2cubeAction, Ko2cubeObservation, Ko2cubeState, Job, RegionInfo, CarbonData, PriceData
-except ImportError:
-    from models import Ko2cubeAction, Ko2cubeObservation, Ko2cubeState, Job, RegionInfo, CarbonData, PriceData
+from models import Ko2cubeAction, Ko2cubeObservation, Ko2cubeState, Job, RegionInfo, CarbonData, PriceData
 
 class Ko2cubeEnvironment(Environment):
     """
