@@ -24,6 +24,12 @@
             "on_demand": 0.384
         },
         {
+            "name": "m5.4xlarge",
+            "cpu": 16,
+            "mem": 64,
+            "on_demand": 0.768
+        },
+        {
             "name": "c5.large",
             "cpu": 2,
             "mem": 4,

@@ -1,0 +1,17 @@
+# Ko2cube KWOK Cluster Configuration
+#
+# Apply this first when setting up the KWOK cluster:
+#   kubectl apply -f kwok/cluster.yaml
+#
+# Then create virtual nodes:
+#   python -m server.kwok.node_setup
+#
+# Note: KWOK's pod scheduling is handled automatically by kwok-controller.
+# We only need to set up the namespace here.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ko2cube
+  labels:
+    app: ko2cube

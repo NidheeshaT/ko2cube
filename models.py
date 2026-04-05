@@ -46,9 +46,13 @@ class Job(BaseModel):
     region: Optional[str] = Field(None, description="Selected region for this job.")
     machine_type: Optional[Literal["spot", "on-demand"]] = Field(None, description="Selected instance type for this job.")
     
-    # Baseline metrics (computed over SLA window)
+    # Baseline metrics (computed over SLA window during reset)
     baseline_carbon_intensity: float = Field(0.0, description="Average carbon intensity across all regions over the SLA window.")
     baseline_spot_price: float = Field(0.0, description="Average spot price across all regions over the SLA window.")
+    # Theoretical minimums for grader normalization (absolute best the agent could do)
+    theoretical_min_carbon: float = Field(0.0, description="Minimum possible carbon in this job's SLA window (used for grader score normalization).")
+    theoretical_min_cost: float = Field(0.0, description="Minimum possible cost in this job's SLA window (used for grader score normalization).")
+
 
 class RunningJob(BaseModel):
     job_id: str = Field(..., description="ID of the running job")

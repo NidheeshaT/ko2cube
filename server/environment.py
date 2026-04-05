@@ -22,6 +22,12 @@ from rewards import (
 )
 from data.scenarios import get_scenario, Scenario
 
+try:
+    from kwok.adapter import KwokAdapter  # when CWD is server/
+except ModuleNotFoundError:
+    from server.kwok.adapter import KwokAdapter  # when CWD is project root
+
+
 class Ko2cubeEnvironment(Environment):
     """
     Ko2cube: A carbon-aware cloud job scheduler environment.
@@ -55,6 +61,10 @@ class Ko2cubeEnvironment(Environment):
         self._deferred: Dict[str, int] = {} # job_id -> step to retry
         self._state = self._init_state()
 
+        # KWOK adapter (mirrors scheduling decisions to a real K8s cluster)
+        # Enabled only when KWOK_ENABLED=true — simulation never depends on it
+        self._kwok = KwokAdapter()
+
     def _init_state(self) -> Ko2cubeState:
         return Ko2cubeState(
             episode_id=str(uuid4()),
@@ -80,6 +90,9 @@ class Ko2cubeEnvironment(Environment):
         self._job_queue = []
         self._active_jobs = []
         self._deferred = {}
+
+        # Clean up pods from the previous episode
+        self._kwok.teardown()
 
         # Reset job registry and precalculate fair baselines
         # Precalculate SLA-window averages so rewards aren't 0.0
@@ -119,10 +132,13 @@ class Ko2cubeEnvironment(Environment):
         phi_before = _potential(self._state)
         queue_snapshot = list(self._job_queue)
         assignment_map = {a.job_id: a for a in action.assignments}
+        print(f"DEBUG step started. queue size: {len(self._job_queue)}")
+        print(f"DEBUG assignment_map keys: {list(assignment_map.keys())}")
         result_parts = []
 
         # 1. Process agent decisions
         for job in list(self._job_queue):
+            print(f"DEBUG checking queued job: {job.job_id}")
             assignment = assignment_map.get(job.job_id)
             if not assignment:
                 continue
@@ -165,6 +181,8 @@ class Ko2cubeEnvironment(Environment):
                     original.status = "completed"
                     original.completion_step = current_step
                 self._state.jobs_completed += 1
+                # Mirror completion to KWOK (delete the finished pod)
+                self._kwok.delete_pod(rj.job_id)
             else:
                 still_running.append(rj)
         self._active_jobs = still_running
@@ -296,7 +314,10 @@ class Ko2cubeEnvironment(Environment):
             steps_remaining=math.ceil((job.eta_minutes or 60) / self._state.step_duration_minutes),
             machine_type=assignment.machine_type or "on-demand"
         ))
-        
+
+        # Mirror scheduling decision to KWOK (fire-and-forget, never blocks sim)
+        self._kwok.submit_pod(job, assignment)
+
         return True, ""
 
     def _calculate_baselines(self, scenario: Scenario):

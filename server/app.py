@@ -39,9 +39,14 @@ from models import Ko2cubeAction, Ko2cubeObservation
 from environment import Ko2cubeEnvironment
 
 
+# Instantiate a single global environment object.
+# This prevents OpenEnv's HTTP wrapper from reinstantiating the environment and losing
+# state (like the job queue and current step) between /reset and /step endpoints.
+_global_env = Ko2cubeEnvironment()
+
 # Create the app with web interface and README integration
 app = create_app(
-    Ko2cubeEnvironment,
+    lambda: _global_env,
     Ko2cubeAction,
     Ko2cubeObservation,
     env_name="ko2cube_env",
