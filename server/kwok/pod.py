@@ -91,21 +91,9 @@ class Pod:
             print(f"Failed to create pod: {e}")
             raise
     
+
     def complete(self):
-        """
-        Triggers pod completion by patching the KWOK completion annotation.
-
-        Requires the following Stage to be applied to the cluster:
-            selector:
-              matchAnnotations:
-                kwok.x-k8s.io/trigger-complete: "true"
-              matchExpressions:
-                - key: '.status.phase'
-                  operator: In
-                  values: [Running]
-
-        The pod must be in Running phase for the stage to fire.
-        """
+        """Forces the pod into a Succeeded (Complete) state immediately."""
         try:
             load_kwok_kubeconfig(self.cluster_name)
         except Exception as e:
@@ -113,31 +101,15 @@ class Pod:
             return
 
         v1 = client.CoreV1Api()
-
-        # First verify the pod is actually Running
         try:
-            pod = v1.read_namespaced_pod(self.name, self.namespace)
-            phase = pod.status.phase if pod.status else None
-            if phase != "Running":
-                print(f"Pod '{self.name}' is in phase '{phase}', not 'Running'. Cannot trigger completion.")
-                return
+            v1.patch_namespaced_pod_status(
+                self.name,
+                self.namespace,
+                {"status": {"phase": "Succeeded", "reason": "Completed"}}
+            )
+            print(f"Pod '{self.name}' status changed to Succeeded")
         except Exception as e:
-            print(f"Failed to read pod '{self.name}': {e}")
-            raise
-
-        # Patch the trigger annotation — KWOK stage watches for this
-        patch_body = {
-            "metadata": {
-                "annotations": {
-                    COMPLETE_TRIGGER_ANNOTATION: "true"
-                }
-            }
-        }
-        try:
-            v1.patch_namespaced_pod(self.name, self.namespace, patch_body)
-            print(f"Pod '{self.name}' completion triggered via annotation.")
-        except Exception as e:
-            print(f"Failed to patch completion annotation on pod '{self.name}': {e}")
+            print(f"Failed to change pod '{self.name}' status to Succeeded: {e}")
             raise
 
     def delete(self):

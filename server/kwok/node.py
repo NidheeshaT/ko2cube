@@ -21,38 +21,52 @@ class NodeDict(dict):
                 },
                 "labels": {
                     # Removed: deprecated beta.kubernetes.io/arch and beta.kubernetes.io/os
-                    "kubernetes.io/arch": spec["arch"],
-                    "kubernetes.io/hostname": name,
-                    "kubernetes.io/os": "linux",
-                    "node.kubernetes.io/instance-type": instance_type,
-                    "topology.kubernetes.io/region": region,
-                    "eks.amazonaws.com/capacityType": capacity_type.upper(),
-                    "type": "kwok",
-                },
+                "kubernetes.io/arch": spec["arch"],
+                "kubernetes.io/hostname": name,
+                "kubernetes.io/os": "linux",
+                "kubernetes.io/role": "agent",
+                "node-role.kubernetes.io/agent": "",
+                "node.kubernetes.io/instance-type": instance_type,
+                "topology.kubernetes.io/region": region,
+                "eks.amazonaws.com/capacityType": capacity_type.upper(),
+                "type": "kwok",
             },
-            "spec": {
-                "taints": [
-                    {
-                        "effect": "NoSchedule",
-                        "key": "kwok.x-k8s.io/node",
-                        "value": "fake"
-                    }
-                ]
+        },
+        "spec": {
+            "taints": [
+                {
+                    "effect": "NoSchedule",
+                    "key": "kwok.x-k8s.io/node",
+                    "value": "fake"
+                }
+            ]
+        },
+        "status": {
+            "capacity": {
+                "cpu": spec["cpu"],
+                "memory": spec["memory"],
+                "pods": str(spec["pods"]),
             },
-            "status": {
-                "capacity": {
-                    "cpu": spec["cpu"],
-                    "memory": spec["memory"],
-                    "pods": str(spec["pods"]),
-                },
-                "allocatable": {
-                    "cpu": spec["cpu"],
-                    "memory": spec["memory"],
-                    "pods": str(spec["pods"]),
-                },
+            "allocatable": {
+                "cpu": spec["cpu"],
+                "memory": spec["memory"],
+                "pods": str(spec["pods"]),
             },
-            "phase": "Running",        # Fixed: moved out of status to root level... 
-        })
+            "nodeInfo": {
+                "architecture": spec["arch"],
+                "bootID": "",
+                "containerRuntimeVersion": "",
+                "kernelVersion": "",
+                "kubeProxyVersion": "fake",
+                "kubeletVersion": "fake",
+                "machineID": "",
+                "operatingSystem": "linux",
+                "osImage": "",
+                "systemUUID": "",
+            },
+            "phase": "Running",
+        },
+    })
 
 
 class Node:

@@ -89,7 +89,7 @@ class Cluster:
                 "Call stop() or delete() before creating a new one."
             )
         extra_flags = _config_to_flags(self.config)
-        cmd = ["kwokctl", "create", "cluster", "--name", self.name, "--enable-crds=Stage"] + extra_flags
+        cmd = ["kwokctl", "create", "cluster", "--name", self.name] + extra_flags
 
         print(f"Creating cluster '{self.name}' (region={self.config['region']}, "
               f"port={self.config.get('kubeApiserverPort', 'random')})...")
@@ -97,13 +97,7 @@ class Cluster:
         try:
             subprocess.run(cmd, check=True)
             print(f"Cluster '{self.name}' created successfully!")
-            # Stage.pod_ready(cluster_name=self.name).apply()
-            # Stage.pod_complete_on_annotation(cluster_name=self.name).apply()
-            # Stage.pod_delete(cluster_name=self.name).apply()
-            # Setup KWOK stages (physics parsing, durations, delays etc)
-            # from .stages import setup_physics_stages
-            # setup_physics_stages(self.name)
-            
+
         except subprocess.CalledProcessError as e:
             print(f"Failed to create cluster: {e}")
             raise
