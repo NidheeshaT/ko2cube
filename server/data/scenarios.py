@@ -164,7 +164,7 @@ TASK_1_EASY = Scenario(
     total_steps=24,
     step_duration_minutes=60,
     lookahead_steps=24,
-    regions=["us-east"],
+    regions=["us-east-1"],
     job_pool=[
         # ETL jobs arriving throughout the day
         _etl(arrival=0,  sla_start=0,  sla_end=6),
@@ -196,7 +196,7 @@ TASK_2_MEDIUM = Scenario(
     total_steps=24,
     step_duration_minutes=60,
     lookahead_steps=24,
-    regions=["us-east", "us-west", "eu-west"],
+    regions=["us-east-1", "us-west-2", "eu-west-1"],
     job_pool=[
         # Delay-tolerant batch
         _etl(arrival=0,  sla_start=0,  sla_end=8),

@@ -63,16 +63,11 @@ def _current_avg_intensity(regions: Dict[str, RegionInfo]) -> float:
 
 
 def expected_cost_baseline(job: Job) -> float:
-    """
-    Fair cost baseline based on the average spot price in the job's SLA window.
-    Expected cost = window_avg_spot_price x runtime_hours x cpu_cores
-    """
+    """Estimated cost if running at market average (USD)."""
     if job.eta_minutes is None:
-        return 0.0  # always-on jobs excluded from cost baseline
-    
+        return 0.0
     runtime_hours = job.eta_minutes / 60.0
-    cpu = max(job.cpu_cores, 1.0)
-    return job.baseline_spot_price * runtime_hours * cpu
+    return job.baseline_spot_price * runtime_hours
 
 
 def expected_carbon_baseline(job: Job) -> float:
@@ -169,6 +164,7 @@ def compute_step_reward(
     queue: List[Job],
     regions: Dict[str, RegionInfo],
     state: Ko2cubeState,
+    phi_before: float,
     phi_after: float,
 ) -> RewardBreakdown:
     """
@@ -179,14 +175,14 @@ def compute_step_reward(
     assignments : Agent's decisions for this step
     queue       : Jobs that were in the queue at the start of this step
     regions     : Current region data (carbon + pricing)
-    state       : Current simulator state (before mutation)
-    phi_after   : Potential φ(s') after state has been mutated - used for shaping
+    state       : Current simulator state (mutated - for metadata/counts)
+    phi_before  : Potential φ(s) BEFORE state was mutated
+    phi_after   : Potential φ(s') AFTER state was mutated
     """
     rb = RewardBreakdown()
     job_map: Dict[str, Job] = {j.job_id: j for j in queue}
-    current_step = state.current_step
+    current_step = state.current_step - 1 # Rewards reference the step just completed
 
-    avg_intensity = _current_avg_intensity(regions)
 
     # Per-assignment SLA + Carbon + Cost-
     for assignment in assignments:
@@ -302,8 +298,7 @@ def compute_step_reward(
                     rb.sla += ALWAYS_ON_SPOT_PENALTY
                     rb.components[f"always_on_spot_{job.job_id}"] = ALWAYS_ON_SPOT_PENALTY
 
-    # Shaping
-    phi_before = _potential(state)
+    # Shaping (delta-potential)
     rb.shaping = phi_after - phi_before
 
     return rb
