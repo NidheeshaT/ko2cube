@@ -1,7 +1,26 @@
 spec_version: 1
 name: ko2cube_env
+description: "A carbon-aware cloud job scheduler environment where agents must optimize for SLA compliance, carbon intensity, and cost efficiency across multiple regions."
 type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
 
+tasks:
+  - id: easy
+    name: "Task 1: Carbon-Aware Deferral"
+    difficulty: easy
+    description: "Only delay-tolerant jobs in a single region. Agent must learn to defer jobs during fossil-intensive peaks (e.g., sunset/midnight) to cleaner midday solar peaks."
+  - id: medium
+    name: "Task 2: Multi-Region Load Balancing"
+    difficulty: medium
+    description: "Three regions with different carbon profiles. Agent must triage urgent CI/CD jobs and pick the cleanest region for batch work while managing spot instance pricing."
+  - id: hard
+    name: "Task 3: Burst Capacity Triage"
+    difficulty: hard
+    description: "All 8 workload types including 'Always-On' API serving. A massive mid-episode burst of jobs tests the agent's ability to prioritize and right-size infrastructure under pressure."
+
+metadata:
+  action_space: "Ko2cubeAction(assignments: List[JobAssignment]) where JobAssignment is (job_id, decision, region, instance_type, machine_type, defer_to_step)"
+  observation_space: "Ko2cubeObservation(current_step, job_queue: List[Job], active_jobs: List[RunningJob], regions: Dict[str, RegionInfo])"
+  primary_reward: "SLA compliance (+1.0) and Carbon efficiency (up to +2.0 bonus for beating market average)"

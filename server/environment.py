@@ -63,9 +63,9 @@ class Ko2cubeEnvironment(Environment):
             step_duration_minutes=60, # 1 hour per step
         )
 
-    def reset(self) -> Ko2cubeObservation:
+    def reset(self, task_id: Optional[str] = None) -> Ko2cubeObservation:
         """Resets the environment for a new episode."""
-        task = os.environ.get("KO2CUBE_TASK", "easy")
+        task = task_id or os.environ.get("KO2CUBE_TASK", "easy")
         
         # Deep copy the scenario to avoid shared state between episodes
         scenario: Scenario = copy.deepcopy(get_scenario(task))
@@ -285,13 +285,10 @@ class Ko2cubeEnvironment(Environment):
         self._state.baseline_carbon_gco2 += expected_carbon_baseline(job)
         self._state.baseline_cost_usd += expected_cost_baseline(job)
         
-        # Min cases for grader normalization
-        cpu_factor = max(job.cpu_cores, 1.0)
-        best_inst = min(region_info.available_instances, key=lambda i: i.spot_price if job.instance_preference == "spot" else i.on_demand_price)
-        self._state.min_cost_usd += (best_inst.spot_price if job.instance_preference == "spot" else best_inst.on_demand_price) * runtime_h
-        
-        theoretical_min_intensity = min(r.carbon.current_intensity for r in regions.values())
-        self._state.min_carbon_gco2 += (theoretical_min_intensity * runtime_h * cpu_factor) 
+        # Min cases for grader normalization (using pre-calculated theoretical minimums)
+        # Note: baseline_* metrics are already on the Job object
+        self._state.min_cost_usd += getattr(job, "theoretical_min_cost", 0.0)
+        self._state.min_carbon_gco2 += getattr(job, "theoretical_min_carbon", 0.0)
 
         self._active_jobs.append(RunningJob(
             job_id=job.job_id,
@@ -303,44 +300,64 @@ class Ko2cubeEnvironment(Environment):
         return True, ""
 
     def _calculate_baselines(self, scenario: Scenario):
-        """Precalculates the fair market average (baseline) for each job in its SLA window."""
+        """Precalculates the fair market average (baseline) and theoretical minimum for each job."""
         regions_list = self._infra_config["regions"]
-        
+
         for job in scenario.job_pool:
             if job.sla_end == ALWAYS_ON or job.eta_minutes is None:
                 job.baseline_carbon_intensity = 0.0
                 job.baseline_spot_price = 0.0
+                job.theoretical_min_carbon = 0.0
+                job.theoretical_min_cost = 0.0
                 continue
                 
-            # Define time window
-            start_t = job.sla_start
-            end_t = job.sla_end
-            window_steps = range(start_t, end_t + 1)
+            # Define window
+            runtime_h = job.eta_minutes / 60.0
+            cpu_factor = max(job.cpu_cores, 1.0)
+            window_steps = range(job.sla_start, job.sla_end + 1)
             
+            # 1. Average Baseline (mean across all regions and all steps in window)
             total_intensity = 0.0
             total_multiplier = 0.0
             divisor = len(window_steps) * len(regions_list)
+            
+            # 2. Theoretical Min (Absolute best region/step in the window)
+            abs_min_carbon_intensity = float('inf')
+            abs_min_price = float('inf')
+
+            # Find cheapest fitting instance base price
+            fitting_prices = [
+                i["on_demand"] for i in self._infra_config["instances"] 
+                if i["cpu"] >= job.cpu_cores and i["mem"] >= job.memory_gb
+            ]
+            ideal_base_price = min(fitting_prices) if fitting_prices else 0.0
             
             for t in window_steps:
                 idx = t % len(self._timeseries)
                 row = self._timeseries[idx]
                 for rname in regions_list:
-                    total_intensity += float(row.get(f"carbon_{rname}", 0.0))
-                    total_multiplier += float(row.get(f"spot_mult_{rname}", 1.0))
+                    c = float(row.get(f"carbon_{rname}", 0.0))
+                    m = float(row.get(f"spot_mult_{rname}", 1.0))
+                    
+                    total_intensity += c
+                    total_multiplier += m
+                    
+                    # Track absolute minimums
+                    if c < abs_min_carbon_intensity:
+                        abs_min_carbon_intensity = c
+                    
+                    current_spot_p = ideal_base_price * m
+                    if current_spot_p < abs_min_price:
+                        abs_min_price = current_spot_p
             
+            # Save baselines
             job.baseline_carbon_intensity = total_intensity / divisor
-            avg_mult = total_multiplier / divisor
+            job.baseline_spot_price = ideal_base_price * (total_multiplier / divisor)
             
-            # Find the 'ideal' (cheapest fitting) machine's base price
-            fitting_instances = [
-                i for i in self._infra_config["instances"] 
-                if i["cpu"] >= job.cpu_cores and i["mem"] >= job.memory_gb
-            ]
-            if fitting_instances:
-                ideal_base_price = min(i["on_demand"] for i in fitting_instances)
-                job.baseline_spot_price = ideal_base_price * avg_mult
-            else:
-                job.baseline_spot_price = 0.0
+            # Save theoretical minimums for the Grader normalization
+            job.theoretical_min_carbon = abs_min_carbon_intensity * runtime_h * cpu_factor
+            job.theoretical_min_cost = abs_min_price * runtime_h
+
 
     def _surface_arriving_jobs(self, scenario: Scenario, step: int):
         existing_ids = {j.job_id for j in self._job_queue}
