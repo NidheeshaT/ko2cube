@@ -1,3 +1,15 @@
+---
+title: ko2cube
+emoji: 🔧
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+app_port: 8000
+base_path: /web
+tags:
+  - openenv
+---
 # Ko2cube Environment
 
 Ko2cube is a carbon-aware cloud job scheduling environment designed for OpenEnv. It challenges AI agents to act as Infrastructure Engineers who must optimize the placement of diverse compute workloads across multiple cloud regions.

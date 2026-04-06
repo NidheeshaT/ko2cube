@@ -45,6 +45,8 @@ class Job(BaseModel):
     completion_step: Optional[int] = Field(None, description="The step at which the job finished running, if applicable.")
     region: Optional[str] = Field(None, description="Selected region for this job.")
     machine_type: Optional[Literal["spot", "on-demand"]] = Field(None, description="Selected instance type for this job.")
+    theoretical_min_carbon: Optional[float] = Field(0, description="Theoretical minimum carbon for this job.")
+    theoretical_min_cost: Optional[float] = Field(0, description="Theoretical minimum cost for this job.")
     
     # Baseline metrics (computed over SLA window)
     baseline_carbon_intensity: float = Field(0.0, description="Average carbon intensity across all regions over the SLA window.")

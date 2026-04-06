@@ -272,6 +272,7 @@ def compute_step_reward(
 
                 # Waste (Over-provisioning)
                 # Calculate what the cheapest valid instance would have cost in this region
+                region_info = regions.get(assignment.region)
                 if region_info:
                     valid_instances = [
                         inst for inst in region_info.available_instances

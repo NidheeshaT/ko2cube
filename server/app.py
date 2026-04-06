@@ -36,7 +36,7 @@ except Exception as e:  # pragma: no cover
     ) from e
 
 from models import Ko2cubeAction, Ko2cubeObservation
-from environment import Ko2cubeEnvironment
+from server.environment import Ko2cubeEnvironment
 
 
 # Create the app with web interface and README integration

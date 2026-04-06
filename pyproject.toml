@@ -13,8 +13,16 @@ dependencies = [
     "uvicorn>=0.24.0"
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
+[tool.setuptools.package-dir]
+ko2cube = "."
+
+[tool.setuptools]
+include-package-data = true
+packages = [
+    "ko2cube",
+    "ko2cube.server"
+]
+
 
 [project.scripts]
 server = "server.app:main"
