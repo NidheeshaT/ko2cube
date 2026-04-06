@@ -14,13 +14,13 @@ from models import (
     Job, RunningJob, RegionInfo, CarbonData, InstanceType,
     JobAssignment, ALWAYS_ON,
 )
-from rewards import (
+from server.rewards import (
     compute_step_reward, compute_terminal_reward,
     compute_grader_score, _potential,
     expected_carbon_baseline, expected_cost_baseline,
     actual_carbon, actual_cost,
 )
-from data.scenarios import get_scenario, Scenario
+from server.data.scenarios import get_scenario, Scenario
 
 class Ko2cubeEnvironment(Environment):
     """
