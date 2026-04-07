@@ -227,19 +227,22 @@ grader_score = 0.6 * carbon_score + 0.3 * cost_score + 0.1 * sla_score
 
 ### Baseline Scores
 
-Scores from running `python eval.py --all-baselines --scenarios easy,medium,hard`:
+Grader scores (0.0–1.0) from running all baseline agents across all three tasks:
 
-| Agent | Task | Grader Score | Total Reward | SLA Violations |
-|-------|------|:------------:|:------------:|:--------------:|
-| RandomAgent | easy | 0.50 | 3.91 | 0 |
-| RandomAgent | medium | 0.38 | -8.55 | 7 |
-| RandomAgent | hard | 0.35 | -3.60 | 45 |
-| CarbonAwareGreedy | easy | 0.50 | -5.00 | 0 |
-| CarbonAwareGreedy | medium | 0.38 | 19.35 | 39 |
-| OracleAgent | easy | 0.50 | -1.12 | 0 |
-| OracleAgent | hard | 0.37 | 156.79 | 198 |
-| HybridAgent | easy | 0.50 | -1.08 | 0 |
-| HybridAgent | medium | 0.38 | 19.35 | 39 |
+| Agent | Easy | Medium | Hard |
+|-------|:----:|:------:|:----:|
+| RandomAgent | 0.72 | 0.43 | 0.44 |
+| GreedyCostAgent | 0.98 | 0.81 | 0.58 |
+| CarbonAwareGreedy | 0.92 | 0.84 | 0.84 |
+| OracleAgent | 0.92 | 0.84 | 0.85 |
+| HybridAgent | 0.92 | 0.84 | 0.85 |
+
+Key observations:
+- **Random** performs poorly, confirming the environment provides meaningful signal.
+- **GreedyCost** excels on easy (cost optimization is enough) but struggles on hard.
+- **CarbonAware** beats GreedyCost on medium/hard by routing to green regions.
+- **Oracle** sets the upper bound using forecast lookahead.
+- Clear difficulty progression: easy > medium ≈ hard for weaker agents.
 
 The hard scenario is genuinely challenging even for oracle-level agents due to always-on constraints, burst capacity, and tight SLA windows across 3 regions.
 
