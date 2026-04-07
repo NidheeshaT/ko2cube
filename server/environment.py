@@ -53,6 +53,7 @@ class Ko2cubeEnvironment(Environment):
         self._job_queue: List[Job] = []
         self._active_jobs: List[RunningJob] = []
         self._deferred: Dict[str, int] = {} # job_id -> step to retry
+        self._scenario: Optional[Scenario] = None  # deep-copied, with baselines
         self._state = self._init_state()
 
     def _init_state(self) -> Ko2cubeState:
@@ -67,32 +68,32 @@ class Ko2cubeEnvironment(Environment):
         """Resets the environment for a new episode."""
         task = task_id or os.environ.get("KO2CUBE_TASK", "easy")
         
-        # Deep copy the scenario to avoid shared state between episodes
-        scenario: Scenario = copy.deepcopy(get_scenario(task))
+        # Deep copy the scenario so baseline calculations and status mutations
+        # don't pollute the registry template between episodes.
+        self._scenario = copy.deepcopy(get_scenario(task))
 
         self._state = self._init_state()
         self._state.task_id = task
-        self._state.scenario_name = scenario.name
-        self._state.difficulty = scenario.difficulty
-        self._state.step_duration_minutes = scenario.step_duration_minutes
+        self._state.scenario_name = self._scenario.name
+        self._state.difficulty = self._scenario.difficulty
+        self._state.step_duration_minutes = self._scenario.step_duration_minutes
         
         self._reset_count += 1
         self._job_queue = []
         self._active_jobs = []
         self._deferred = {}
 
-        # Reset job registry and precalculate fair baselines
-        # Precalculate SLA-window averages so rewards aren't 0.0
-        self._calculate_baselines(scenario)
+        # Precalculate fair baselines (SLA-window averages) on the deep copy
+        self._calculate_baselines(self._scenario)
 
-        for job in scenario.job_pool:
+        for job in self._scenario.job_pool:
             job.status = "queued"
             self._state.all_jobs[job.job_id] = job
 
         # Surface jobs arriving at step 0
-        self._surface_arriving_jobs(scenario, 0)
+        self._surface_arriving_jobs(self._scenario, 0)
         
-        regions = self._build_regions(scenario, 0)
+        regions = self._build_regions(self._scenario, 0)
 
         return Ko2cubeObservation(
             current_step=0,
@@ -102,16 +103,13 @@ class Ko2cubeEnvironment(Environment):
             last_action_result="Episode started.",
             done=False,
             reward=0.0,
-            metadata={"scenario": scenario.name}
+            metadata={"scenario": self._scenario.name}
         )
 
     def step(self, action: Ko2cubeAction) -> Ko2cubeObservation: # type: ignore[override]
         """Executes one step in the environment."""
         current_step = self._state.current_step
-        task = os.environ.get("KO2CUBE_TASK", "easy")
-        # Note: We use the scenario reference from state if we wanted to be perfectly isolated,
-        # but for simplicity we reload the template. Deepcopy in reset ensures job_pool is fresh.
-        scenario = get_scenario(task) 
+        scenario = self._scenario
         regions = self._build_regions(scenario, current_step)
 
         # Snapshot before mutation
@@ -170,11 +168,14 @@ class Ko2cubeEnvironment(Environment):
         self._active_jobs = still_running
 
         # 3. SLA expiry check (using pre-increment current_step)
+        #    Each job can only trigger one SLA violation (status transitions to sla_missed permanently).
         for job in list(self._state.all_jobs.values()):
             if job.status in ["queued", "deferred"] and job.sla_end != ALWAYS_ON and current_step > job.sla_end:
                 job.status = "sla_missed"
                 self._state.sla_violations += 1
                 self._job_queue = [j for j in self._job_queue if j.job_id != job.job_id]
+                # Remove from deferred dict to prevent re-surfacing
+                self._deferred.pop(job.job_id, None)
                 result_parts.append(f"{job.job_id}: SLA breached")
 
         # 4. Reward & Potential Computation
@@ -301,7 +302,9 @@ class Ko2cubeEnvironment(Environment):
 
     def _calculate_baselines(self, scenario: Scenario):
         """Precalculates the fair market average (baseline) and theoretical minimum for each job."""
-        regions_list = self._infra_config["regions"]
+        # Use scenario regions, not all infrastructure regions,
+        # so baselines reflect the regions the agent can actually choose from.
+        regions_list = scenario.regions
 
         for job in scenario.job_pool:
             if job.sla_end == ALWAYS_ON or job.eta_minutes is None:
@@ -368,9 +371,10 @@ class Ko2cubeEnvironment(Environment):
     def _surface_deferred_jobs(self, step: int):
         to_move = [jid for jid, target in self._deferred.items() if target <= step]
         for jid in to_move:
-            job = self._state.all_jobs[jid]
-            job.status = "queued" 
-            self._job_queue.append(job)
+            job = self._state.all_jobs.get(jid)
+            if job and job.status not in ("sla_missed", "dropped", "completed"):
+                job.status = "queued"
+                self._job_queue.append(job)
             del self._deferred[jid]
 
     @property
@@ -379,8 +383,7 @@ class Ko2cubeEnvironment(Environment):
 
     def get_observation(self) -> Ko2cubeObservation:
         """Returns the current observation without advancing the simulation."""
-        task = os.environ.get("KO2CUBE_TASK", "easy")
-        scenario = get_scenario(task)
+        scenario = self._scenario
         return Ko2cubeObservation(
             current_step=self._state.current_step,
             job_queue=list(self._job_queue),
