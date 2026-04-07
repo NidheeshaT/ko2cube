@@ -108,9 +108,7 @@ class Ko2cubeEnvironment(Environment):
     def step(self, action: Ko2cubeAction) -> Ko2cubeObservation: # type: ignore[override]
         """Executes one step in the environment."""
         current_step = self._state.current_step
-        task = os.environ.get("KO2CUBE_TASK", "easy")
-        # Note: We use the scenario reference from state if we wanted to be perfectly isolated,
-        # but for simplicity we reload the template. Deepcopy in reset ensures job_pool is fresh.
+        task = self._state.task_id or os.environ.get("KO2CUBE_TASK", "easy")
         scenario = get_scenario(task) 
         regions = self._build_regions(scenario, current_step)
 

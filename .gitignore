@@ -4,3 +4,18 @@ __pycache__/
 *.py[cod]
 .docs
 .env
+.env.*
+
+# Training & eval outputs
+eval_results/
+checkpoints/
+outputs/
+*.ckpt
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

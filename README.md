@@ -225,6 +225,24 @@ grader_score = 0.6 * carbon_score + 0.3 * cost_score + 0.1 * sla_score
 | `OracleAgent` | Uses forecast optimally | Upper bound reference |
 | `HybridAgent` | Balanced multi-objective | Realistic baseline |
 
+### Baseline Scores
+
+Scores from running `python eval.py --all-baselines --scenarios easy,medium,hard`:
+
+| Agent | Task | Grader Score | Total Reward | SLA Violations |
+|-------|------|:------------:|:------------:|:--------------:|
+| RandomAgent | easy | 0.50 | 3.91 | 0 |
+| RandomAgent | medium | 0.38 | -8.55 | 7 |
+| RandomAgent | hard | 0.35 | -3.60 | 45 |
+| CarbonAwareGreedy | easy | 0.50 | -5.00 | 0 |
+| CarbonAwareGreedy | medium | 0.38 | 19.35 | 39 |
+| OracleAgent | easy | 0.50 | -1.12 | 0 |
+| OracleAgent | hard | 0.37 | 156.79 | 198 |
+| HybridAgent | easy | 0.50 | -1.08 | 0 |
+| HybridAgent | medium | 0.38 | 19.35 | 39 |
+
+The hard scenario is genuinely challenging even for oracle-level agents due to always-on constraints, burst capacity, and tight SLA windows across 3 regions.
+
 ## Carbon Data Providers
 
 ### Static Provider (Default)
@@ -320,6 +338,53 @@ docker run -p 8000:8000 \
 | `/tasks` | GET | List available tasks/scenarios |
 | `/health` | GET | Health check |
 | `/metrics` | GET | Prometheus metrics |
+
+## Running the Inference Script
+
+The inference script uses the OpenAI client to run an LLM agent through all 3 tasks and emits mandatory `[START]`/`[STEP]`/`[END]` logs.
+
+### Required Environment Variables
+
+```bash
+export API_BASE_URL="https://router.huggingface.co/v1"   # LLM API endpoint
+export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"            # Model identifier
+export HF_TOKEN="your-hf-token"                           # HuggingFace API key
+export IMAGE_NAME="ko2cube:latest"                        # Docker image name
+```
+
+### Running
+
+```bash
+# Build the Docker image first
+docker build -t ko2cube:latest .
+
+# Run inference (all 3 tasks)
+python inference.py
+```
+
+### Output Format
+
+```
+[START] task=easy env=ko2cube model=Qwen/Qwen2.5-72B-Instruct
+[STEP] step=1 action=schedule(etl_sales_000->us-east-1) reward=1.50 done=false error=null
+[STEP] step=2 action=defer(ml_training_001->step3) reward=0.80 done=false error=null
+...
+[END] success=true steps=12 score=0.72 rewards=1.50,0.80,...
+```
+
+## Pre-Submission Checklist
+
+- [x] HF Space deploys and responds to `reset()`
+- [x] `openenv validate` passes
+- [x] `docker build && docker run` works
+- [x] `inference.py` runs and produces scores for all 3 tasks
+- [x] 3 tasks with graders returning scores in [0.0, 1.0]
+- [x] Typed Pydantic models for Observation, Action, State
+- [x] `step()` returns observation, reward, done
+- [x] `reset()` returns initial observation
+- [x] `state()` returns current state
+- [x] 317+ passing tests
+- [x] README with setup, usage, and baseline scores
 
 ## Contributing
 
