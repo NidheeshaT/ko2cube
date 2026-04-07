@@ -5,12 +5,38 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ko2cube"
 version = "0.1.0"
-description = "ko2cube project"
+description = "Carbon-aware Kubernetes job scheduling environment for LLM training"
 requires-python = ">=3.10"
 dependencies = [
     "openenv-core>=0.2.3",
     "fastapi>=0.115.0",
     "uvicorn>=0.24.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "httpx>=0.24.0",
+]
+providers = [
+    "aiohttp>=3.9.0",
+    "prometheus-client>=0.17.0",
+]
+train = [
+    "trl>=0.29.0",
+    "peft>=0.11.0",
+    "vllm>=0.4.0",
+    "transformers>=4.40.0",
+    "datasets>=2.18.0",
+    "accelerate>=0.30.0",
+    "bitsandbytes>=0.43.0",
+    "matplotlib>=3.8.0",
+    "tabulate>=0.9.0",
+]
+all = [
+    "ko2cube[dev,providers,train]",
 ]
 
 [tool.setuptools.package-dir]
@@ -23,6 +49,10 @@ packages = [
     "ko2cube.server"
 ]
 
-
 [project.scripts]
 server = "server.app:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"

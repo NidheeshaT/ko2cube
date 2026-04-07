@@ -233,7 +233,7 @@ TASK_3_HARD = Scenario(
     total_steps=48,
     step_duration_minutes=60,
     lookahead_steps=24,
-    regions=["us-east", "us-west", "eu-west"],
+    regions=["us-east-1", "us-west-2", "eu-west-1"],
     job_pool=[
         # Always-on API (must protect throughout)
         _api_serving(arrival=0),
