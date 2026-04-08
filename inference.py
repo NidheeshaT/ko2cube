@@ -42,7 +42,8 @@ STDOUT FORMAT
     [END] success=true steps=3 score=1.00 rewards=0.00,0.00,1.00
 """
 
-from pydantic import ValidationError
+import re
+import traceback
 import asyncio
 import os
 import textwrap
@@ -50,8 +51,7 @@ from typing import List, Optional
 
 from openai import OpenAI
 from ko2cube.client import Ko2cubeEnv
-from ko2cube.server.environment import Ko2cubeAction,Ko2cubeObservation,Ko2cubeEnvironment
-from ko2cube.models import Ko2cubeAction,Ko2cubeObservation
+from ko2cube.models import Ko2cubeAction, Ko2cubeObservation
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -65,7 +65,7 @@ TASK_NAME = os.getenv("MY_ENV_V4_TASK", "ko2cube")
 BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "ko2cube")
 MAX_STEPS = 8
 TEMPERATURE = 0.7
-MAX_TOKENS = 4096
+MAX_TOKENS = 24000
 SUCCESS_SCORE_THRESHOLD = 0.1
 MAX_TOTAL_REWARD = 60.0 # Ceiling for normalization in [END] line
 TASKS = ["task1_easy", "task2_medium", "task3_hard"]
@@ -183,7 +183,7 @@ def get_model_message(client: OpenAI, step: int, obs: dict, last_reward: float, 
     user_prompt = build_user_prompt(step, obs, last_reward, history)
     for i in range(3):
         try:
-            completion = client.chat.completions.create(
+            completion = client.chat.completions.parse(
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -191,17 +191,29 @@ def get_model_message(client: OpenAI, step: int, obs: dict, last_reward: float, 
                 ],
                 temperature=0.1, # Conservative for scheduling
                 max_tokens=MAX_TOKENS,
+                response_format=Ko2cubeAction
             )
             raw_text = completion.choices[0].message.content or ""
-            json_text = parse_llm_response(raw_text)
+            # json_text = parse_llm_response(raw_text)
             
             # Validation
-            Ko2cubeAction.model_validate_json(json_text)
-            return json_text
+            Ko2cubeAction.model_validate_json(raw_text)
+            return raw_text
         except Exception as e:
             print(f"  [DEBUG] LLM parsing/API retry {i+1}: {e}")
+            traceback.print_exc()
             
     return '{"assignments": []}'
+
+
+async def _connect_env(image_name: str) -> Ko2cubeEnv:
+    """Create and connect to the Ko2cube environment."""
+    if not image_name or image_name == "":
+        env = Ko2cubeEnv(base_url="http://localhost:8000")
+        await env.connect()
+    else:
+        env = await Ko2cubeEnv.from_docker_image(image=image_name)
+    return env
 
 
 async def run_episode(client: OpenAI, task_id: str) -> None:
@@ -214,14 +226,27 @@ async def run_episode(client: OpenAI, task_id: str) -> None:
 
     log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
 
-    try:
-        if not IMAGE_NAME or IMAGE_NAME == "":
-            env = Ko2cubeEnv(base_url="http://localhost:8000")
-            await env.connect()
-        else:
-            env = await Ko2cubeEnv.from_docker_image(image=IMAGE_NAME)
+    MAX_CONNECT_RETRIES = 3
 
-        result = await env.reset(task_id=task_id)
+    try:
+        # Retry connection in case of WebSocket keepalive timeouts
+        for attempt in range(1, MAX_CONNECT_RETRIES + 1):
+            try:
+                env = await _connect_env(IMAGE_NAME)
+                result = await env.reset(task_id=task_id)
+                break
+            except Exception as conn_err:
+                print(f"  [WARN] Connection attempt {attempt}/{MAX_CONNECT_RETRIES} failed: {conn_err}")
+                if env:
+                    try:
+                        await env.close()
+                    except Exception:
+                        pass
+                    env = None
+                if attempt == MAX_CONNECT_RETRIES:
+                    raise
+                await asyncio.sleep(2 * attempt)  # back-off before retry
+
         obs_dict = result.observation.model_dump()
         last_reward = 0.0
 
@@ -230,15 +255,31 @@ async def run_episode(client: OpenAI, task_id: str) -> None:
                 break
 
             action_json = get_model_message(client, step, obs_dict, last_reward, history)
-            
-            # Execute step
             action_obj = Ko2cubeAction.model_validate_json(action_json)
-            result = await env.step(action_obj)
-            
+
+            # Retry env.step on WebSocket errors
+            for step_attempt in range(1, MAX_CONNECT_RETRIES + 1):
+                try:
+                    result = await env.step(action_obj)
+                    break
+                except Exception as step_err:
+                    print(f"  [WARN] env.step attempt {step_attempt}/{MAX_CONNECT_RETRIES} failed: {step_err}")
+                    if step_attempt == MAX_CONNECT_RETRIES:
+                        raise
+                    # Reconnect and re-reset before retrying the step
+                    try:
+                        await env.close()
+                    except Exception:
+                        pass
+                    env = await _connect_env(IMAGE_NAME)
+                    result = await env.reset(task_id=task_id)
+                    obs_dict = result.observation.model_dump()
+                    await asyncio.sleep(2 * step_attempt)
+
             obs_obj = result.observation
             obs_dict = obs_obj.model_dump()
             reward = result.reward or 0.0
-            
+
             rewards.append(reward)
             steps_taken = step
             last_reward = reward
@@ -251,38 +292,32 @@ async def run_episode(client: OpenAI, task_id: str) -> None:
 
         # Calculate final metrics
         total_reward = sum(rewards)
-        # Normalize score based on our estimated ceiling
         score = max(0.0, min(1.0, total_reward / MAX_TOTAL_REWARD))
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     except Exception as e:
         print(f"  [ERROR] Episode failed: {e}")
-        # traceback.print_exc()
+        traceback.print_exc()
     finally:
         if env:
             try:
                 await env.close()
-            except:
+            except Exception:
                 pass
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 async def main() -> None:
     """Main entry point iterating through all tasks."""
-    import re
-    global re # Ensure re is available
-    
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    
+
     print(f"🚀 Starting Ko2cube Inference Baseline", flush=True)
     print(f"📡 API: {API_BASE_URL} | Model: {MODEL_NAME}", flush=True)
 
     for task in TASKS:
         await run_episode(client, task)
-        # Brief pause between tasks if needed
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)  # brief pause between tasks
 
 
 if __name__ == "__main__":
-    import re # for parsing
     asyncio.run(main())
