@@ -393,4 +393,4 @@ def compute_grader_score(state: Ko2cubeState) -> float:
         cost_score = max(0.0, 1.0 - state.total_cost_usd / max(state.baseline_cost_usd, 0.01))
 
     final = 0.50 * sla_score + 0.35 * carbon_score + 0.15 * cost_score
-    return round(min(1.0, max(0.0, final)), 4)
+    return round(min(0.999, max(0.001, final)), 4)
