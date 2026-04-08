@@ -65,22 +65,45 @@ TASK_NAME = os.getenv("MY_ENV_V4_TASK", "ko2cube")
 BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "ko2cube")
 MAX_STEPS = 8
 TEMPERATURE = 0.7
-MAX_TOKENS = 81920
-SUCCESS_SCORE_THRESHOLD = 0.1  # normalized score in [0, 1]
-
-# Max possible reward: each token contributes 0.1, across all steps
-_MAX_REWARD_PER_STEP = MAX_TOKENS * 0.1
-MAX_TOTAL_REWARD = MAX_STEPS * _MAX_REWARD_PER_STEP
+MAX_TOKENS = 4096
+SUCCESS_SCORE_THRESHOLD = 0.1
+MAX_TOTAL_REWARD = 60.0 # Ceiling for normalization in [END] line
+TASKS = ["task1_easy", "task2_medium", "task3_hard"]
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
-        You are interacting with a Caron aware job scheduling mechanism
-        You have respond with the below json_format_schema:
-        """+str(Ko2cubeAction.model_json_schema())+ """
+    You are an expert Carbon-Aware Cloud Scheduler (Ko2cube).
+    Your goal is to maximize SLA compliance while minimizing carbon footprints and cost.
+    
+    You will be provided with:
+    1. A Current Job Queue (jobs waiting to be scheduled).
+    2. Regional Data (carbon intensity forecasts and instance pricing/availability).
+    
+    You must decide for EVERY job in the queue:
+    - schedule: Place the job in a region + instance type now.
+    - defer: Wait for a cleaner/cheaper window (only if job allows).
+    - drop: Terminate the job (SLA violation).
+    
+    Strategy:
+    - Prioritize jobs near their SLA deadline.
+    - Place compute-heavy jobs in regions with low solar/wind carbon intensity.
+    - Use 'spot' instances for savings, but prefer 'on-demand' for critical always-on jobs.
+    
+    RESPONSE FORMAT:
+    You must respond with a raw JSON object containing an "assignments" list.
+    Example:
+    {
+      "assignments": [
+        {"job_id": "job_1", "decision": "schedule", "region": "us-east-1", "instance_type": "m5.large", "machine_type": "spot"},
+        {"job_id": "job_2", "decision": "defer", "defer_to_step": 5}
+      ]
+    }
+    
+    Respond ONLY with the raw JSON object. No markdown, no reasoning text.
     """
 ).strip()
 
-Ko2cubeAction.model_json_schema()
+
 def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
@@ -88,8 +111,10 @@ def log_start(task: str, env: str, model: str) -> None:
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
     error_val = error if error else "null"
     done_val = str(done).lower()
+    # Compact action string for the strictly required log format
+    action_log = action.replace("\n", "").replace(" ", "")[:200]
     print(
-        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        f"[STEP] step={step} action={action_log} reward={reward:.2f} done={done_val} error={error_val}",
         flush=True,
     )
 
@@ -99,110 +124,165 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
     print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
 
 
-def build_user_prompt(step: int, last_echoed: str, last_reward: float, history: List[str]) -> str:
-    history_block = "\n".join(history[-4:]) if history else "None"
+def build_user_prompt(step: int, obs: dict, last_reward: float, history: List[str]) -> str:
+    """Formats the current environment state into a structured dashboard for the LLM."""
+    queue = obs.get("job_queue", [])
+    regions = obs.get("regions", {})
+    
+    job_table = "| ID | CPU | RAM | SLA End | Tolerant | Pref |\n|---|---|---|---|---|---|\n"
+    for j in queue:
+        sla_end = "ALWAYS" if j['sla_end'] == -1 else j['sla_end']
+        job_table += f"| {j['job_id']} | {j['cpu_cores']} | {j['memory_gb']}G | {sla_end} | {j['delay_tolerant']} | {j['instance_preference']} |\n"
+
+    region_summary = ""
+    for rname, rinfo in regions.items():
+        carbon = rinfo['carbon']['current_intensity']
+        cheapest_spot = min([i['spot_price'] for i in rinfo['available_instances']])
+        region_summary += f"- {rname}: Carbon={carbon:.1f} gCO2/kWh, Min Spot=${cheapest_spot:.3f}\n"
+
+    history_block = "\n".join(history[-3:]) if history else "None"
+
     return textwrap.dedent(
         f"""
-        Step: {step}
-        Current Observations: {last_echoed!r}
-        Last reward: {last_reward:.2f}
-        Previous steps:
+        ## Ko2cube Dashboard - Step {step}
+        
+        ### Current Job Queue
+        {job_table}
+        
+        ### Regional Status (Carbon & Price)
+        {region_summary}
+        
+        ### History (Last 3 Steps)
         {history_block}
-        Send your next message.
+        
+        Last Reward: {last_reward:.2f}
+        
+        **Action Required:** Assign decisions for all queued jobs. Respond in JSON.
         """
     ).strip()
 
 
-def get_model_message(client: OpenAI, step: int, last_echoed: str, last_reward: float, history: List[str]) -> str:
-    user_prompt = build_user_prompt(step, last_echoed, last_reward, history)
-    try:
-        for i in range(3):
-            try:
-                completion = client.chat.completions.parse(
-                    model=MODEL_NAME,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=TEMPERATURE,
-                    max_tokens=MAX_TOKENS,
-                    response_format=Ko2cubeAction
-                )
-
-                text = (completion.choices[0].message.content or "")
-                print(completion)
-                print(text)
-                text=Ko2cubeAction.model_validate_json(text)
-                return text if text else "hello"
-            except ValidationError as exc:
-                print("retring... pydantic error")
-
-    except Exception as exc:
-        print(f"[DEBUG] Model request failed: {exc}", flush=True)
-        return "hello"
+def parse_llm_response(text: str) -> str:
+    """Robustly extracts JSON from LLM response text."""
+    text = text.strip()
+    # Remove markdown blocks
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+    
+    # Try to find JSON braces if there's surrounding text
+    match = re.search(r'(\{.*\})', text, re.DOTALL)
+    if match:
+        text = match.group(1)
+        
+    return text
 
 
-async def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL,api_key=API_KEY)
+def get_model_message(client: OpenAI, step: int, obs: dict, last_reward: float, history: List[str]) -> str:
+    user_prompt = build_user_prompt(step, obs, last_reward, history)
+    for i in range(3):
+        try:
+            completion = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1, # Conservative for scheduling
+                max_tokens=MAX_TOKENS,
+            )
+            raw_text = completion.choices[0].message.content or ""
+            json_text = parse_llm_response(raw_text)
+            
+            # Validation
+            Ko2cubeAction.model_validate_json(json_text)
+            return json_text
+        except Exception as e:
+            print(f"  [DEBUG] LLM parsing/API retry {i+1}: {e}")
+            
+    return '{"assignments": []}'
 
-    # env = await Ko2cubeEnv.from_docker_image(image=IMAGE_NAME)
-    env = Ko2cubeEnvironment()
 
+async def run_episode(client: OpenAI, task_id: str) -> None:
+    env = None
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
     score = 0.0
     success = False
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        # result = await env.reset() # OpenENV.reset()
-        result = env.reset() # OpenENV.reset()
-        # last_echoed = result.observation
-        observation = result
+        if not IMAGE_NAME or IMAGE_NAME == "":
+            env = Ko2cubeEnv(base_url="http://localhost:8000")
+            await env.connect()
+        else:
+            env = await Ko2cubeEnv.from_docker_image(image=IMAGE_NAME)
+
+        result = await env.reset(task_id=task_id)
+        obs_dict = result.observation.model_dump()
         last_reward = 0.0
 
         for step in range(1, MAX_STEPS + 1):
             if result.done:
                 break
 
-            message = get_model_message(client, step, observation, last_reward, history)
-
-            # result = await env.step(Ko2cubeAction.model_validate_json(message))
-            result = env.step(message)
-            print(result)
-            # obs = result.observation
-            obs = result
-
+            action_json = get_model_message(client, step, obs_dict, last_reward, history)
+            
+            # Execute step
+            action_obj = Ko2cubeAction.model_validate_json(action_json)
+            result = await env.step(action_obj)
+            
+            obs_obj = result.observation
+            obs_dict = obs_obj.model_dump()
             reward = result.reward or 0.0
-            done = result.done
-            error = None
-
+            
             rewards.append(reward)
             steps_taken = step
-            observation = obs
             last_reward = reward
 
-            log_step(step=step, action=message, reward=reward, done=done, error=error)
+            log_step(step=step, action=action_json, reward=reward, done=result.done, error=None)
+            history.append(f"Step {step}: {len(action_obj.assignments)} actions -> reward {reward:+.2f}")
 
-            history.append(f"Step {step}: {message!r} -> reward {reward:+.2f}")
-
-            if done:
+            if result.done:
                 break
 
-        score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
-        score = min(max(score, 0.0), 1.0)  # clamp to [0, 1]
+        # Calculate final metrics
+        total_reward = sum(rewards)
+        # Normalize score based on our estimated ceiling
+        score = max(0.0, min(1.0, total_reward / MAX_TOTAL_REWARD))
         success = score >= SUCCESS_SCORE_THRESHOLD
 
+    except Exception as e:
+        print(f"  [ERROR] Episode failed: {e}")
+        # traceback.print_exc()
     finally:
-        try:
-            # await env.close()
-            env.close()
-        except Exception as e:
-            print(f"[DEBUG] env.close() error (container cleanup): {e}", flush=True)
+        if env:
+            try:
+                await env.close()
+            except:
+                pass
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
+async def main() -> None:
+    """Main entry point iterating through all tasks."""
+    import re
+    global re # Ensure re is available
+    
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    
+    print(f"🚀 Starting Ko2cube Inference Baseline", flush=True)
+    print(f"📡 API: {API_BASE_URL} | Model: {MODEL_NAME}", flush=True)
+
+    for task in TASKS:
+        await run_episode(client, task)
+        # Brief pause between tasks if needed
+        await asyncio.sleep(1)
+
+
 if __name__ == "__main__":
+    import re # for parsing
     asyncio.run(main())
