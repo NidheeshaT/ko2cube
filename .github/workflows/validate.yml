@@ -33,12 +33,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install .
+          pip install -e .
           pip install openenv-core uvicorn httpx
 
       # Step 4: Run environment unit tests (Grader, Rewards)
       - name: Run environment unit tests
         run: |
+          # Use the parent directory in PYTHONPATH so 'import ko2cube' works correctly
+          export PYTHONPATH=$PYTHONPATH:$(pwd)/..
           python -c "
           from ko2cube.server.environment import Ko2cubeEnvironment
           from ko2cube.models import Ko2cubeAction, JobAssignment

@@ -18,11 +18,10 @@ ko2cube = "."
 
 [tool.setuptools]
 include-package-data = true
-packages = [
-    "ko2cube",
-    "ko2cube.server"
-]
+packages = ["ko2cube", "ko2cube.server", "ko2cube.server.data"]
 
+[tool.setuptools.package-data]
+"ko2cube.server.data" = ["*.csv", "*.json"]
 
 [project.scripts]
-server = "server.app:main"
+server = "ko2cube.server.app:main"
