@@ -40,17 +40,21 @@ from ko2cube.server.environment import Ko2cubeEnvironment
 
 
 # Instantiate a single global environment object.
-# This prevents OpenEnv's HTTP wrapper from reinstantiating the environment and losing
-# state (like the job queue and current step) between /reset and /step endpoints.
-# Create the app with web interface and README integration
+_global_env = Ko2cubeEnvironment()
 
 app = create_app(
-    Ko2cubeEnvironment,
+    lambda: _global_env,
     Ko2cubeAction,
     Ko2cubeObservation,
     env_name="ko2cube_env",
-    max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
+    max_concurrent_envs=1,
 )
+
+@app.get("/score")
+async def get_score():
+    """Manual endpoint for grader scores, strictly clamped for validator."""
+    score = _global_env.grader_score()
+    return {"score": max(0.01, min(0.99, score))}
 
 
 def main(host: str = "0.0.0.0", port: int = 8000):

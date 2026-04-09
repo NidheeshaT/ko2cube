@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
-from models import (
+from ko2cube.models import (
     Ko2cubeAction, Ko2cubeObservation, Ko2cubeState,
     Job, RunningJob, RegionInfo, CarbonData, InstanceType,
     JobAssignment, ALWAYS_ON,
@@ -101,7 +101,7 @@ class Ko2cubeEnvironment(Environment):
             regions=regions,
             last_action_result="Episode started.",
             done=False,
-            reward=0.0,
+            reward=0.01,
             metadata={"scenario": scenario.name}
         )
 
@@ -205,6 +205,9 @@ class Ko2cubeEnvironment(Environment):
             rb.terminal = trb.terminal
             rb.components.update(trb.components)
 
+        # Clamp step reward strictly within (0, 1)
+        clamped_reward = max(0.01, min(0.99, round(rb.total, 4)))
+
         return Ko2cubeObservation(
             current_step=next_step,
             job_queue=list(self._job_queue),
@@ -212,7 +215,7 @@ class Ko2cubeEnvironment(Environment):
             regions=self._build_regions(scenario, next_step),
             last_action_result=" | ".join(result_parts) or "Clock ticked.",
             done=done,
-            reward=round(rb.total, 4),
+            reward=clamped_reward,
             metadata=rb.to_dict()
         )
 

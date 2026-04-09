@@ -1,77 +1,138 @@
 ---
-title: ko2cube
-emoji: 🔧
-colorFrom: blue
-colorTo: purple
+title: Ko2cube - Carbon-Aware Cloud Scheduler
+emoji: 🌍
+colorFrom: green
+colorTo: blue
 sdk: docker
 pinned: false
 app_port: 8000
-base_path: /web
 tags:
   - openenv
 ---
-# Ko2cube Environment
 
-Ko2cube is a carbon-aware cloud job scheduling environment designed for OpenEnv. It challenges AI agents to act as Infrastructure Engineers who must optimize the placement of diverse compute workloads across multiple cloud regions.
+# 🌍 Ko2cube — Carbon-Aware Cloud Scheduler
 
-The goal is to maximize **SLA compliance** while minimizing **Carbon Intensity** and **Infrastructure Cost**.
+An **OpenEnv-compliant** reinforcement learning environment that simulates a cloud infrastructure engineering desk. AI agents act as Infrastructure Schedulers who must move compute workloads across global regions to minimize carbon footprint and cost without breaching service level agreements (SLAs).
 
-## Key Features
+Built for the **OpenEnv Round 1**.
 
-- **Realistic Infrastructure**: Simulates real AWS EC2 instance types (m5, c5, r5) with CPU/Memory constraints and Spot/On-Demand pricing.
-- **Dynamic Carbon Data**: Uses a 12-week high-fidelity synthetic timeseries featuring daily solar/wind cycles and weekly demand patterns.
-- **Complexity Progression**: 3 distinct tasks ranging from single-region batch deferral to multi-region triage of high-burst workloads.
-- **Programmatic Grader**: A mathematically robust scoring system (0.0–1.0) that compares agent performance against both a local "Market Average" and a theoretical "Global Optimum."
+🔗 **Live Environment:** [Hugging Face Space](https://huggingface.co/spaces/NidheeshaT/ko2cube)
 
+---
 
-## Action & Observation Space
+## ⚡ How It Works
 
-### Observation Space
-The agent receives a `Ko2cubeObservation` containing:
-- **`job_queue`**: List of jobs waiting to be scheduled (includes CPU/Mem requirements, SLA window, and `delay_tolerant` flag).
-- **`active_jobs`**: List of jobs currently running and their remaining steps.
-- **`regions`**: Dictionary mapping global regions (us-east-1, eu-west-1, etc.) to their **current carbon intensity** and a **24-hour forecast**.
-- **`available_instances`**: Per-region inventory of instance types with current **Spot Pricing multipliers**.
+The agent manages a continuous **job queue** and global **cloud infrastructure**. For every job in the queue, the agent must make a scheduling decision based on real-time grid carbon intensity and spot instance availability.
 
-### Action Space
-The agent submits a `Ko2cubeAction` containing a list of `assignments`:
-- **`schedule`**: Run the job immediately. Requires specifying a `region`, `instance_type`, and `machine_type` (Spot or On-Demand).
-- **`defer`**: Target a specific future step for re-evaluation. Used for "shifting" loads to cleaner hours.
-- **`drop`**: Permanently cancel a job (used as a last resort for non-viable workloads).
+### The Challenge
+Agents must balance three competing objectives:
 
-## Task Scenarios
+| Objective | Description | Weight |
+|-----------|-------------|--------|
+| **SLA Compliance** | Complete jobs before their deadline. | 50% |
+| **Carbon Intensity** | Shift loads to regions/hours with high renewable energy mix. | 35% |
+| **Cost Efficiency** | Utilize Spot instances and cheap regions effectively. | 15% |
 
-1.  **Task 1 (Easy)**: Single region, delay-tolerant batch jobs only. The agent must learn to defer work away from nightly fossil-fuel peaks to midday solar peaks.
-2.  **Task 2 (Medium)**: Three regions. Introduces non-deferrable CI/CD jobs. The agent must correctly triage "Always-Immediately" vs "Delay-Tolerant" workloads and move heavy loads to the cleanest available region.
-3.  **Task 3 (Hard)**: Full burst capacity. Includes "Always-On" API serving workloads that must never be deferred or run on Spot. A massive mid-episode burst tests triage and right-sizing under pressure.
+---
 
-## Reward System
+## 📋 Tasks (3 Core Scenarios)
 
-The reward function is multi-component:
-- **SLA Compliance**: High points for finishing jobs within their window. Heaving penalties for breaches or dropping "Always-On" tasks.
-- **Carbon Efficiency**: Proportional bonuses for beating the SLA-window market average.
-- **Cost Efficiency**: Proportional rewards for utilizing Spot instances and avoiding expensive regions.
-- **Right-Sizing Penalty**: An explicit penalty for "Over-provisioning" (selecting an instance much larger/more expensive than the job actually needs).
+| Task | ID | Difficulty | Workload Type | Key Optimization |
+|------|----|------------|---------------|------------------|
+| **Task 1** | `easy` | Easy | Single Region, Delay-Tolerant | **Time Shifting:** Defer non-urgent work to solar peaks. |
+| **Task 2** | `medium` | Medium | Multi-Region, Mixed Workload | **Spatial Shifting:** Move work to the cleanest global grid. |
+| **Task 3** | `hard` | Hard | Burst Capacity & Always-On | **Triage:** Prioritize critical APIs under infrastructure pressure. |
 
-## Setup & Usage
+---
 
-### 1. Local Development
+## 📊 Observation Space
+
+The agent receives a `Ko2cubeObservation` containing the full system state:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `current_step` | integer | Current simulation hour (0-168) |
+| `job_queue` | List[Job] | Waiting jobs with CPU/Mem requirements and SLA window |
+| `active_jobs` | List[RunningJob] | Jobs currently executing in different regions |
+| `regions` | Dict[str, RegionInfo] | Carbon intensity (Current + 24h Forecast) and Instance inventory |
+
+---
+
+## 🛠️ Action Space
+
+The agent submits a list of `JobAssignment` decisions:
+
+| Action | Parameters | Description |
+|--------|------------|-------------|
+| `schedule`| `region`, `instance_type`, `machine_type` | Start the job immediately on a specific instance. |
+| `defer` | `defer_to_step` | Wait for a cleaner/cheaper window in the future. |
+| `drop`  | — | Cancel the job permanently (last resort). |
+
+---
+
+## 🏆 Scoring & Rewards
+
+Scoring is deterministic and strictly clamped to **(0.01, 0.99)** per OpenEnv validator requirements.
+
+*   **SLA Score**: Percentage of jobs completed within their deadline.
+*   **Carbon Score**: Normalized improvement over a "Market Average" baseline using SLA-window integration.
+*   **Cost Score**: Savings achieved relative to On-Demand list prices.
+
+---
+
+## 🏗️ Project Structure
+
 ```bash
-# Install dependencies
-uv sync
-
-# Run the simulator server
-python -m server.app
+ko2cube/
+├── server/
+│   ├── app.py            # FastAPI server with Gradio UI
+│   ├── environment.py    # Core Ko2cubeEnvironment simulation logic
+│   ├── rewards.py        # Clamped Grader and Reward computation
+│   └── data/             # Synthetic Carbon & Infrastructure datasets
+├── models.py             # Pydantic models for Action/Observation/State
+├── inference.py          # Baseline LLM Agent with robust connection logic
+├── openenv.yaml          # Environment metadata & task definitions
+├── Dockerfile            # Containerized deployment spec
+└── README.md             # This document
 ```
 
-### 2. Validation
-To verify OpenEnv spec compliance:
-```bash
-openenv validate
-```
+---
 
-### 3. Docker
+## 🚀 Getting Started
+
+### 1. Run with Docker (Recommended)
 ```bash
 docker build -t ko2cube-env .
 docker run -p 8000:8000 ko2cube-env
 ```
+
+### 2. Run Local Development
+```bash
+# Install dependencies
+pip install -e .
+
+# Start server
+PYTHONPATH="." python -m server.app
+```
+
+---
+
+## 🤖 Running Inference
+
+The baseline agent uses **Structured CoT Prompting** to make scheduling decisions.
+
+```bash
+export API_BASE_URL="https://router.huggingface.co/v1"
+export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
+export HF_TOKEN="your_hf_token"
+
+python inference.py
+```
+
+---
+
+## ⚙️ CI/CD & Automation
+
+This repository includes pre-configured **GitHub Actions** located in `.github/workflows/`:
+
+**Validate OpenEnv**: Automatically builds your Docker image and runs environment unit tests on every push.

@@ -10,17 +10,20 @@ tasks:
   - id: easy
     name: "Task 1: Carbon-Aware Deferral"
     difficulty: easy
-    description: "Only delay-tolerant jobs in a single region. Agent must learn to defer jobs during fossil-intensive peaks (e.g., sunset/midnight) to cleaner midday solar peaks."
+    description: "The agent manages a single region with only delay-tolerant jobs. Success requires identifying the fossil-heavy carbon intensity peaks (e.g., sunset/midnight) and deferring workloads to solar-dominant midday hours."
   - id: medium
-    name: "Task 2: Multi-Region Load Balancing"
+    name: "Task 2: Multi-Region Spatial Shifting"
     difficulty: medium
-    description: "Three regions with different carbon profiles. Agent must triage urgent CI/CD jobs and pick the cleanest region for batch work while managing spot instance pricing."
+    description: "Introduces three global regions (us-east-1, eu-west-1, us-west-2) with distinct carbon profiles. The agent must triage non-deferrable CI/CD jobs while spatially shifting batch loads to whichever region is currently greenest."
   - id: hard
-    name: "Task 3: Burst Capacity Triage"
+    name: "Task 3: Dynamic Burst Capacity Triage"
     difficulty: hard
-    description: "All 8 workload types including 'Always-On' API serving. A massive mid-episode burst of jobs tests the agent's ability to prioritize and right-size infrastructure under pressure."
+    description: "The hardest scenario features 'Always-On' API serving workloads that cannot be deferred or run on Spot. A massive mid-episode burst tests the agent's ability to right-size infrastructure and prioritize critical SLA-sensitive traffic under extreme pressure."
 
 metadata:
+  domain: "Cloud Infrastructure / Green Computing"
   action_space: "Ko2cubeAction(assignments: List[JobAssignment]) where JobAssignment is (job_id, decision, region, instance_type, machine_type, defer_to_step)"
   observation_space: "Ko2cubeObservation(current_step, job_queue: List[Job], active_jobs: List[RunningJob], regions: Dict[str, RegionInfo])"
-  primary_reward: "SLA compliance (+1.0) and Carbon efficiency (up to +2.0 bonus for beating market average)"
+  primary_reward: "Weighted objective: SLA Compliance (0.5), Carbon Intensity reduction (0.35), and Cost Savings (0.15)."
+  grading_behavior: "Deterministic programmatic grading comparing agent performance against market average and theoretical optimum for each scenario."
+  clamping: "Output scores strictly within (0.01, 0.99) range."

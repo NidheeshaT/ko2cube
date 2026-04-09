@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from models import Job, JobAssignment, Ko2cubeState, RegionInfo, ALWAYS_ON
+from ko2cube.models import Job, JobAssignment, Ko2cubeState, RegionInfo, ALWAYS_ON
 
 # Constants
 # SLA penalties (dominant - largest magnitudes)
@@ -369,28 +369,29 @@ def compute_grader_score(state: Ko2cubeState) -> float:
     total = max(len(state.all_jobs), 1)
 
     # SLA: success rate (completed / total jobs)
-    sla_score = state.jobs_completed / total
+    # Using 0.01 to 0.99 to ensure we are strictly within (0, 1)
+    sla_score = max(0.01, min(0.99, state.jobs_completed / total))
 
     # Carbon: Rescale improvement relative to the best possible theoretical emissions.
     # Score = 1.0 if agent is equal to best-case. Score = 0.0 if agent is equal to the baseline.
     if state.baseline_carbon_gco2 > state.min_carbon_gco2:
-        carbon_score = max(0.0, min(1.0, 
+        carbon_score = max(0.01, min(0.99, 
             (state.baseline_carbon_gco2 - state.total_carbon_gco2) / 
             (state.baseline_carbon_gco2 - state.min_carbon_gco2)
         ))
     else:
         # If baseline == min (e.g. single region, no optimization possible), 
         # use a soft score relative to the baseline.
-        carbon_score = max(0.0, 1.0 - state.total_carbon_gco2 / max(state.baseline_carbon_gco2, 1.0))
+        carbon_score = max(0.01, 0.99 - state.total_carbon_gco2 / max(state.baseline_carbon_gco2, 1.0))
 
     # Cost: Rescale improvement relative to the best possible theoretical cost.
     if state.baseline_cost_usd > state.min_cost_usd:
-        cost_score = max(0.0, min(1.0, 
+        cost_score = max(0.01, min(0.99, 
             (state.baseline_cost_usd - state.total_cost_usd) / 
             (state.baseline_cost_usd - state.min_cost_usd)
         ))
     else:
-        cost_score = max(0.0, 1.0 - state.total_cost_usd / max(state.baseline_cost_usd, 0.01))
+        cost_score = max(0.01, 0.99 - state.total_cost_usd / max(state.baseline_cost_usd, 0.01))
 
     final = 0.50 * sla_score + 0.35 * carbon_score + 0.15 * cost_score
-    return round(min(0.999, max(0.001, final)), 4)
+    return round(min(0.99, max(0.01, final)), 4)
