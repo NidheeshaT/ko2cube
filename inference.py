@@ -49,7 +49,7 @@ import os
 import textwrap
 from typing import List, Optional
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 from ko2cube.client import Ko2cubeEnv
 from ko2cube.models import Ko2cubeAction, Ko2cubeObservation
 
@@ -57,7 +57,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-IMAGE_NAME = os.getenv("IMAGE_NAME","ko2cube:latest") # If you are using docker image 
+IMAGE_NAME = os.getenv("IMAGE_NAME")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen3.5-9B:together"
@@ -179,11 +179,11 @@ def parse_llm_response(text: str) -> str:
     return text
 
 
-def get_model_message(client: OpenAI, step: int, obs: dict, last_reward: float, history: List[str]) -> str:
+async def get_model_message(client: AsyncOpenAI, step: int, obs: dict, last_reward: float, history: List[str]) -> str:
     user_prompt = build_user_prompt(step, obs, last_reward, history)
     for i in range(3):
         try:
-            completion = client.chat.completions.create(
+            completion = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -215,7 +215,7 @@ async def _connect_env(image_name: str) -> Ko2cubeEnv:
     return env
 
 
-async def run_episode(client: OpenAI, task_id: str) -> None:
+async def run_episode(client: AsyncOpenAI, task_id: str) -> None:
     env = None
     history: List[str] = []
     rewards: List[float] = []
@@ -253,27 +253,14 @@ async def run_episode(client: OpenAI, task_id: str) -> None:
             if result.done:
                 break
 
-            action_json = get_model_message(client, step, obs_dict, last_reward, history)
+            action_json = await get_model_message(client, step, obs_dict, last_reward, history)
             action_obj = Ko2cubeAction.model_validate_json(action_json)
 
-            # Retry env.step on WebSocket errors
-            for step_attempt in range(1, MAX_CONNECT_RETRIES + 1):
-                try:
-                    result = await env.step(action_obj)
-                    break
-                except Exception as step_err:
-                    print(f"  [WARN] env.step attempt {step_attempt}/{MAX_CONNECT_RETRIES} failed: {step_err}")
-                    if step_attempt == MAX_CONNECT_RETRIES:
-                        raise
-                    # Reconnect and re-reset before retrying the step
-                    try:
-                        await env.close()
-                    except Exception:
-                        pass
-                    env = await _connect_env(IMAGE_NAME)
-                    result = await env.reset(task_id=task_id)
-                    obs_dict = result.observation.model_dump()
-                    await asyncio.sleep(2 * step_attempt)
+            try:
+                result = await env.step(action_obj)
+            except Exception as step_err:
+                print(f"  [ERROR] env.step failed: {step_err}")
+                raise
 
             obs_obj = result.observation
             obs_dict = obs_obj.model_dump()
@@ -309,7 +296,7 @@ async def run_episode(client: OpenAI, task_id: str) -> None:
 
 async def main() -> None:
     """Main entry point iterating through all tasks."""
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY, timeout=15.0)
+    client = AsyncOpenAI(base_url=API_BASE_URL, api_key=API_KEY, timeout=15.0)
 
     print(f"🚀 Starting Ko2cube Inference Baseline", flush=True)
     print(f"📡 API: {API_BASE_URL} | Model: {MODEL_NAME}", flush=True)
