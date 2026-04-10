@@ -57,10 +57,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-IMAGE_NAME = os.getenv("IMAGE_NAME")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen3.5-9B:together"
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
+HF_TOKEN = os.getenv("HF_TOKEN")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen3.5-9B:together")
 TASK_NAME = os.getenv("MY_ENV_V4_TASK", "ko2cube")
 BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "ko2cube")
 MAX_STEPS = 50
@@ -231,7 +231,7 @@ async def run_episode(client: AsyncOpenAI, task_id: str) -> None:
         # Retry connection in case of WebSocket keepalive timeouts
         for attempt in range(1, MAX_CONNECT_RETRIES + 1):
             try:
-                env = await _connect_env(IMAGE_NAME)
+                env = await _connect_env(LOCAL_IMAGE_NAME)
                 result = await env.reset(task_id=task_id)
                 break
             except Exception as conn_err:
@@ -296,7 +296,7 @@ async def run_episode(client: AsyncOpenAI, task_id: str) -> None:
 
 async def main() -> None:
     """Main entry point iterating through all tasks."""
-    client = AsyncOpenAI(base_url=API_BASE_URL, api_key=API_KEY, timeout=15.0)
+    client = AsyncOpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN, timeout=15.0)
 
     print(f"🚀 Starting Ko2cube Inference Baseline", flush=True)
     print(f"📡 API: {API_BASE_URL} | Model: {MODEL_NAME}", flush=True)
