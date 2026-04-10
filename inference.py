@@ -63,9 +63,9 @@ API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen3.5-9B:together"
 TASK_NAME = os.getenv("MY_ENV_V4_TASK", "ko2cube")
 BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "ko2cube")
-MAX_STEPS = 8
+MAX_STEPS = 50
 TEMPERATURE = 0.7
-MAX_TOKENS = 5000
+MAX_TOKENS = 750
 SUCCESS_SCORE_THRESHOLD = 0.1
 MAX_TOTAL_REWARD = 60.0 # Ceiling for normalization in [END] line
 TASKS = ["easy", "medium", "hard"]
@@ -183,22 +183,21 @@ def get_model_message(client: OpenAI, step: int, obs: dict, last_reward: float, 
     user_prompt = build_user_prompt(step, obs, last_reward, history)
     for i in range(3):
         try:
-            completion = client.chat.completions.parse(
+            completion = client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.1, # Conservative for scheduling
-                max_tokens=MAX_TOKENS,
-                response_format=Ko2cubeAction
+                max_tokens=MAX_TOKENS
             )
             raw_text = completion.choices[0].message.content or ""
-            # json_text = parse_llm_response(raw_text)
+            json_text = parse_llm_response(raw_text)
             
             # Validation
-            Ko2cubeAction.model_validate_json(raw_text)
-            return raw_text
+            Ko2cubeAction.model_validate_json(json_text)
+            return json_text
         except Exception as e:
             print(f"  [DEBUG] LLM parsing/API retry {i+1}: {e}")
             traceback.print_exc()
@@ -310,7 +309,7 @@ async def run_episode(client: OpenAI, task_id: str) -> None:
 
 async def main() -> None:
     """Main entry point iterating through all tasks."""
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY, timeout=15.0)
 
     print(f"🚀 Starting Ko2cube Inference Baseline", flush=True)
     print(f"📡 API: {API_BASE_URL} | Model: {MODEL_NAME}", flush=True)
