@@ -65,10 +65,10 @@ TASK_NAME = os.getenv("MY_ENV_V4_TASK", "ko2cube")
 BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "ko2cube")
 MAX_STEPS = 8
 TEMPERATURE = 0.7
-MAX_TOKENS = 24000
+MAX_TOKENS = 5000
 SUCCESS_SCORE_THRESHOLD = 0.1
 MAX_TOTAL_REWARD = 60.0 # Ceiling for normalization in [END] line
-TASKS = ["task1_easy", "task2_medium", "task3_hard"]
+TASKS = ["easy", "medium", "hard"]
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
