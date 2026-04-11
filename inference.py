@@ -292,7 +292,7 @@ async def run_episode(client: OpenAI, task_id: str) -> None:
 
         # Calculate final metrics
         total_reward = sum(rewards)
-        score = max(0.0, min(1.0, total_reward / MAX_TOTAL_REWARD))
+        score = max(0.01, min(0.99, total_reward / MAX_TOTAL_REWARD))
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     except Exception as e:
