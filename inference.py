@@ -54,7 +54,15 @@ from openai import OpenAI
 from client import Ko2cubeEnv
 from models import Ko2cubeAction, Ko2cubeObservation, JobAssignment, Job, ALWAYS_ON
 
+try:
+    from server.rewards import compute_grader_score as _compute_grader_score
+except ImportError:
+    _compute_grader_score = None
+
 IMAGE_NAME = os.getenv("IMAGE_NAME", "ko2cube:latest")
+# Set ENV_URL to skip Docker and connect directly to a running server (e.g. your HF Space).
+# e.g. ENV_URL=https://swasthikshetty-ko2cube.hf.space
+ENV_URL = os.getenv("ENV_URL")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
@@ -113,7 +121,7 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -368,8 +376,10 @@ async def run_task(
 
         # Get the grader score from state
         state = await env.state()
-        from server.rewards import compute_grader_score
-        score = compute_grader_score(state)
+        if _compute_grader_score is not None:
+            score = _compute_grader_score(state)
+        else:
+            score = sum(rewards) / max(len(rewards), 1)
         score = min(max(score, 0.0), 1.0)
         success = score >= 0.1
 
@@ -392,7 +402,13 @@ async def main() -> None:
         max_retries=1,
     )
 
-    env = await Ko2cubeEnv.from_docker_image(image=IMAGE_NAME)
+    if ENV_URL:
+        print(f"[DEBUG] Connecting to running server: {ENV_URL}", flush=True)
+        env = Ko2cubeEnv(base_url=ENV_URL)
+        await env.connect()
+    else:
+        print(f"[DEBUG] Spinning up Docker image: {IMAGE_NAME}", flush=True)
+        env = await Ko2cubeEnv.from_docker_image(image=IMAGE_NAME)
 
     try:
         scores = {}
