@@ -46,7 +46,8 @@ import json
 import os
 import re
 import textwrap
-from typing import Dict, List, Optional
+import time
+from typing import List, Optional
 
 from openai import OpenAI
 
@@ -61,7 +62,12 @@ MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 BENCHMARK = "ko2cube"
 TASKS = ["easy", "medium", "hard"]
 TEMPERATURE = 0.7
-MAX_TOKENS = 4096
+# JSON assignments are small; large max_tokens slows generation and risks timeouts.
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "768"))
+# Per HTTP request — validators recommend this to avoid hanging on slow LLM APIs.
+LLM_TIMEOUT_SEC = float(os.getenv("LLM_TIMEOUT_SEC", "30"))
+# Hard stop for entire script (default 25 min) so Phase-2 stays under 30 min wall clock.
+INFERENCE_MAX_TOTAL_SEC = float(os.getenv("INFERENCE_MAX_TOTAL_SEC", str(25 * 60)))
 
 SYSTEM_PROMPT = textwrap.dedent("""\
 You are a carbon-aware cloud job scheduler. Your goal is to minimize carbon emissions \
@@ -115,7 +121,7 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 # ─── Observation → prompt ────────────────────────────────────────────
 
 def format_observation(obs: Ko2cubeObservation) -> str:
-    """Convert observation into a concise prompt for the LLM."""
+    """Convert observation into a concise prompt for the LLM (kept compact for latency)."""
     lines = [f"=== STEP {obs.current_step} ===", ""]
 
     lines.append("JOBS IN QUEUE:")
@@ -145,12 +151,14 @@ def format_observation(obs: Ko2cubeObservation) -> str:
             avg_future = sum(forecast[:3]) / min(3, len(forecast))
             trend = " ↓improving" if avg_future < carbon * 0.9 else (" ↑worsening" if avg_future > carbon * 1.1 else " →stable")
         lines.append(f"  {rname}: carbon={carbon:.0f} gCO2/kWh{trend}")
+        # One compact line per region for instances (full catalog is repetitive and slows the API).
+        inst_bits = []
         for inst in rinfo.available_instances:
-            lines.append(
-                f"    {inst.name}: cpu={inst.cpu_cores}, mem={inst.memory_gb}GB, "
-                f"spot=${inst.spot_price:.3f}/hr, od=${inst.on_demand_price:.3f}/hr, "
-                f"avail={inst.available_count}"
+            inst_bits.append(
+                f"{inst.name}:{int(inst.cpu_cores)}c/{int(inst.memory_gb)}g "
+                f"sp${inst.spot_price:.2f}/od${inst.on_demand_price:.2f} x{inst.available_count}"
             )
+        lines.append("    " + " | ".join(inst_bits))
 
     if obs.active_jobs:
         lines.append("")
@@ -276,9 +284,30 @@ def call_llm(client: OpenAI, obs: Ko2cubeObservation, history: List[str]) -> str
         return ""
 
 
+async def call_llm_bounded(
+    client: OpenAI, obs: Ko2cubeObservation, history: List[str], per_call_deadline: float
+) -> str:
+    """Run sync LLM call in a thread with a hard asyncio deadline (global budget aware)."""
+    remaining = per_call_deadline - time.monotonic()
+    if remaining <= 0:
+        return ""
+    # Slightly above HTTP timeout so OpenAI client raises first; this catches hangs.
+    cap = min(LLM_TIMEOUT_SEC + 5.0, remaining)
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(call_llm, client, obs, history),
+            timeout=cap,
+        )
+    except asyncio.TimeoutError:
+        print("[DEBUG] LLM call exceeded asyncio deadline", flush=True)
+        return ""
+
+
 # ─── Single episode runner ───────────────────────────────────────────
 
-async def run_task(client: OpenAI, env: Ko2cubeEnv, task_id: str) -> float:
+async def run_task(
+    client: OpenAI, env: Ko2cubeEnv, task_id: str, global_deadline: float
+) -> float:
     """
     Run a single episode for the given task, emitting mandatory logs.
     Returns the grader score [0, 1].
@@ -292,17 +321,30 @@ async def run_task(client: OpenAI, env: Ko2cubeEnv, task_id: str) -> float:
     log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
 
     try:
+        if time.monotonic() >= global_deadline:
+            raise RuntimeError("global time budget exceeded before task start")
+
         result = await env.reset(task_id=task_id)
         obs = result.observation
 
-        max_steps = {"easy": 15, "medium": 30, "hard": 55}.get(task_id, 50)
+        # Match server/data/scenarios.py total_steps (easy=24, medium=24, hard=48).
+        max_steps = {"easy": 24, "medium": 24, "hard": 48}.get(task_id, 48)
 
         for step in range(1, max_steps + 1):
+            if time.monotonic() >= global_deadline:
+                print("[DEBUG] Global inference time budget exceeded mid-episode", flush=True)
+                break
+
             if result.done:
                 break
 
-            # Get LLM decision
-            raw_response = call_llm(client, obs, history)
+            # Per-step absolute deadline: min(global budget, HTTP timeout window)
+            step_end = min(
+                global_deadline,
+                time.monotonic() + LLM_TIMEOUT_SEC + 5.0,
+            )
+
+            raw_response = await call_llm_bounded(client, obs, history, step_end)
             action = parse_llm_response(raw_response, obs)
 
             # Execute
@@ -342,14 +384,24 @@ async def run_task(client: OpenAI, env: Ko2cubeEnv, task_id: str) -> float:
 # ─── Main ─────────────────────────────────────────────────────────────
 
 async def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # Float timeout = total seconds per request (OpenAI Python SDK / httpx under the hood).
+    client = OpenAI(
+        base_url=API_BASE_URL,
+        api_key=API_KEY,
+        timeout=LLM_TIMEOUT_SEC,
+        max_retries=1,
+    )
 
     env = await Ko2cubeEnv.from_docker_image(image=IMAGE_NAME)
 
     try:
         scores = {}
+        global_deadline = time.monotonic() + INFERENCE_MAX_TOTAL_SEC
         for task_id in TASKS:
-            score = await run_task(client, env, task_id)
+            if time.monotonic() >= global_deadline:
+                print("[DEBUG] Skipping remaining tasks: time budget exhausted", flush=True)
+                break
+            score = await run_task(client, env, task_id, global_deadline)
             scores[task_id] = score
             print(f"[DEBUG] {task_id} score: {score:.2f}", flush=True)
 
