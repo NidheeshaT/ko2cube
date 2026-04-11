@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GitHub Actions: Sync to Hugging Face Hub (Spaces)
+# This workflow automatically mirrors your GitHub repository to your 
+# Hugging Face Space whenever you push to the 'main' branch.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Sync to Hub
+
+on:
+  push:
+    branches:
+      - main
+  # Allow manual trigger from the GitHub Actions tab
+  workflow_dispatch:
+
+# Prevent multiple syncs from running at once
+concurrency:
+  group: sync-to-hub
+  cancel-in-progress: true
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Install git-lfs
+        run: git lfs install
+
+      - name: Push to Hugging Face Hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # Use force push to keep the Hub exactly in sync with GitHub
+          git remote add hf https://nagarajpandith:$HF_TOKEN@huggingface.co/spaces/nagarajpandith/ko2cube || true
+          git push hf main --force

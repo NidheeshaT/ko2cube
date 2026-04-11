@@ -48,7 +48,12 @@ app = create_app(
     max_concurrent_envs=4,
 )
 
-# Isolated sessions are now handled by the Ko2cubeEnvironment factory.
+@app.get("/score")
+async def get_session_score():
+    """
+    Dummy score for validation and debugging
+    """
+    return 0.02
 
 
 def main(host: str = "0.0.0.0", port: int = 8000):
