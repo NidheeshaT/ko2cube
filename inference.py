@@ -47,6 +47,7 @@ import traceback
 import asyncio
 import os
 import textwrap
+import sys
 from typing import List, Optional
 
 from openai import AsyncOpenAI
@@ -104,24 +105,21 @@ SYSTEM_PROMPT = textwrap.dedent(
 ).strip()
 
 
-def log_start(task: str, env: str, model: str) -> None:
-    print(f"[START] task={task} env={env} model={model}", flush=True)
+def format_start(task: str, env: str, model: str) -> str:
+    return f"[START] task={task} env={env} model={model}"
 
 
-def log_step(task_id: str, step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+def format_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> str:
     error_val = error if error else "null"
     done_val = str(done).lower()
     # Compact action string for the strictly required log format
-    action_log = action.replace("\n", "").replace(" ", "")[:200]
-    print(
-        f"[STEP] task={task_id} step={step} action={action_log} reward={reward:.2f} done={done_val} error={error_val}",
-        flush=True,
-    )
+    action_log = action.replace("\n", "").replace(" ", "")[:250]
+    return f"[STEP] step={step} action={action_log} reward={reward:.2f} done={done_val} error={error_val}"
 
 
-def log_end(task_id: str, success: bool, steps: int, score: float, rewards: List[float]) -> None:
+def format_end(success: bool, steps: int, score: float, rewards: List[float]) -> str:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] task={task_id} success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
+    return f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}"
 
 
 def build_user_prompt(step: int, obs: dict, last_reward: float, history: List[str]) -> str:
@@ -202,8 +200,8 @@ async def get_model_message(client: AsyncOpenAI, step: int, obs: dict, last_rewa
                 raise ValueError("LLM failed to return a valid Ko2cubeAction object.")
             return action_obj
         except Exception as e:
-            print(f"  [DEBUG] LLM parsing/API retry {i+1}: {e}")
-            traceback.print_exc()
+            print(f"  [DEBUG] LLM parsing/API retry {i+1}: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             
     return Ko2cubeAction(assignments=[])
 
@@ -218,15 +216,16 @@ async def _connect_env(image_name: str) -> Ko2cubeEnv:
     return env
 
 
-async def run_episode(client: AsyncOpenAI, base_url: str, task_id: str) -> None:
+async def run_episode(client: AsyncOpenAI, base_url: str, task_id: str) -> List[str]:
     env = Ko2cubeEnv(base_url=base_url)
+    episode_logs: List[str] = []
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
     score = 0.01
     success = False
 
-    log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+    episode_logs.append(format_start(task=task_id, env=BENCHMARK, model=MODEL_NAME))
 
     try:
         # Connect to the shared environment server
@@ -245,7 +244,7 @@ async def run_episode(client: AsyncOpenAI, base_url: str, task_id: str) -> None:
             try:
                 result = await env.step(action_obj)
             except Exception as step_err:
-                print(f"  [ERROR] env.step failed: {step_err}")
+                print(f"  [ERROR] env.step failed: {step_err}", file=sys.stderr)
                 raise
 
             obs_obj = result.observation
@@ -256,7 +255,12 @@ async def run_episode(client: AsyncOpenAI, base_url: str, task_id: str) -> None:
             steps_taken = step
             last_reward = reward
 
-            log_step(task_id=task_id, step=step, action=action_obj.model_dump_json(), reward=reward, done=result.done, error=None)
+            # Extract any error message from last_action_result if it implies failure
+            step_error = None
+            if "failed" in obs_obj.last_action_result.lower() or "error" in obs_obj.last_action_result.lower():
+                step_error = obs_obj.last_action_result
+
+            episode_logs.append(format_step(step=step, action=action_obj.model_dump_json(), reward=reward, done=result.done, error=step_error))
             history.append(f"Step {step}: {len(action_obj.assignments)} actions -> reward {reward:+.2f}")
 
             if result.done:
@@ -264,44 +268,51 @@ async def run_episode(client: AsyncOpenAI, base_url: str, task_id: str) -> None:
 
         # Calculate final metrics
         total_reward = sum(rewards)
-        # Normalize score and clamp strictly within (0, 1) per validator requirements
-        score = max(0.01, min(0.99, total_reward / MAX_TOTAL_REWARD))
+        # Normalize score and clamp strictly within [0, 1] per validator requirements
+        score = max(0.0, min(1.0, total_reward / MAX_TOTAL_REWARD))
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     except Exception as e:
-        print(f"  [ERROR] Episode failed: {e}")
-        traceback.print_exc()
+        print(f"  [ERROR] Episode failed: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
     finally:
         if env:
             try:
                 await env.close()
             except Exception:
                 pass
-        log_end(task_id=task_id, success=success, steps=steps_taken, score=score, rewards=rewards)
+        episode_logs.append(format_end(success=success, steps=steps_taken, score=score, rewards=rewards))
+
+    return episode_logs
 
 
 async def main() -> None:
     """Main entry point running tasks in parallel using a shared container."""
     client = AsyncOpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN, timeout=15.0)
 
-    print(f"🚀 Starting Ko2cube Inference Baseline (Parallel Shared)", flush=True)
-    print(f"📡 API: {API_BASE_URL} | Model: {MODEL_NAME}", flush=True)
+    print(f"🚀 Starting Ko2cube Inference Baseline (Parallel Shared)", flush=True, file=sys.stderr)
+    print(f"📡 API: {API_BASE_URL} | Model: {MODEL_NAME}", flush=True, file=sys.stderr)
 
     shared_env = None
     try:
         shared_env = await _connect_env(LOCAL_IMAGE_NAME)
         # Retrieve the URL from the shared container (convert ws://... back to http://...)
         base_url = shared_env._ws_url.replace("ws://", "http://").replace("/ws", "")
-        print(f"🌍 Shared environment live at {base_url}", flush=True)
+        print(f"🌍 Shared environment live at {base_url}", flush=True, file=sys.stderr)
 
         # Run tasks in parallel against the shared server
-        await asyncio.gather(*(run_episode(client, base_url, task) for task in TASKS))
+        task_results = await asyncio.gather(*(run_episode(client, base_url, task) for task in TASKS))
+        
+        # Finally, print logs in order
+        for episode_logs in task_results:
+            for log_line in episode_logs:
+                print(log_line, flush=True)
     
     except KeyboardInterrupt:
-        print("\n⚠️ Interrupted by user. Shutting down...", flush=True)
+        print("\n⚠️ Interrupted by user. Shutting down...", flush=True, file=sys.stderr)
     finally:
         if shared_env:
-            print(f"🛑 Cleaning up shared environment and killing container...", flush=True)
+            print(f"🛑 Cleaning up shared environment and killing container...", flush=True, file=sys.stderr)
             try:
                 await shared_env.close()
             except Exception:
