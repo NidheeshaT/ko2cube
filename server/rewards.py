@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from models import Job, JobAssignment, Ko2cubeState, RegionInfo, ALWAYS_ON
+from ko2cube.models import Job, JobAssignment, Ko2cubeState, RegionInfo, ALWAYS_ON
 
 # Constants
 # SLA penalties (dominant - largest magnitudes)

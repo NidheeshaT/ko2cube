@@ -9,18 +9,18 @@ from typing import Dict, List, Optional
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
-from models import (
+from ko2cube.models import (
     Ko2cubeAction, Ko2cubeObservation, Ko2cubeState,
     Job, RunningJob, RegionInfo, CarbonData, InstanceType,
     JobAssignment, ALWAYS_ON,
 )
-from server.rewards import (
+from ko2cube.server.rewards import (
     compute_step_reward, compute_terminal_reward,
     compute_grader_score, _potential,
     expected_carbon_baseline, expected_cost_baseline,
     actual_carbon, actual_cost,
 )
-from server.data.scenarios import get_scenario, Scenario
+from ko2cube.server.data.scenarios import get_scenario, Scenario
 
 class Ko2cubeEnvironment(Environment):
     """

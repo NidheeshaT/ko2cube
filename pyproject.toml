@@ -20,8 +20,10 @@ ko2cube = "."
 include-package-data = true
 packages = [
     "ko2cube",
-    "ko2cube.server"
+    "ko2cube.server",
+    "ko2cube.server.data"
 ]
+package-data = {"ko2cube.server.data" =["*.json", "*.csv"]}
 
 
 [project.scripts]
