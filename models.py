@@ -38,7 +38,7 @@ class Job(BaseModel):
     instance_preference: Literal["spot", "on-demand"] = Field(..., description="Preferred instance lifecycle")
     
     # Status fields tracked by the simulator
-    status: Literal["queued", "running", "completed", "dropped", "sla_missed"] = Field(
+    status: Literal["queued", "running", "completed", "dropped", "sla_missed", "deferred"] = Field(
         default="queued", description="Current status of the job in the system."
     )
     start_step: Optional[int] = Field(None, description="The step at which the job started running, if applicable.")

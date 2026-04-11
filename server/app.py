@@ -39,22 +39,16 @@ from ko2cube.models import Ko2cubeAction, Ko2cubeObservation
 from ko2cube.server.environment import Ko2cubeEnvironment
 
 
-# Instantiate a single global environment object.
-_global_env = Ko2cubeEnvironment()
-
+# Create the app with isolated environment instances per session.
 app = create_app(
-    lambda: _global_env,
+    Ko2cubeEnvironment,  # Factory creates a new instance per session
     Ko2cubeAction,
     Ko2cubeObservation,
     env_name="ko2cube_env",
-    max_concurrent_envs=1,
+    max_concurrent_envs=4,
 )
 
-@app.get("/score")
-async def get_score():
-    """Manual endpoint for grader scores, strictly clamped for validator."""
-    score = _global_env.grader_score()
-    return {"score": max(0.01, min(0.99, score))}
+# Isolated sessions are now handled by the Ko2cubeEnvironment factory.
 
 
 def main(host: str = "0.0.0.0", port: int = 8000):

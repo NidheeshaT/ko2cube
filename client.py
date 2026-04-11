@@ -8,17 +8,10 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-# This assumes we are running in a context where 'models' is importable (root or package)
-try:
-    from models import (
-        Ko2cubeAction, Ko2cubeObservation, Ko2cubeState,
-        Job, RunningJob, RegionInfo
-    )
-except ImportError:
-    from .models import (
-        Ko2cubeAction, Ko2cubeObservation, Ko2cubeState,
-        Job, RunningJob, RegionInfo
-    )
+from .models import (
+    Ko2cubeAction, Ko2cubeObservation, Ko2cubeState,
+    Job, RunningJob, RegionInfo
+)
 
 class Ko2cubeEnv(EnvClient[Ko2cubeAction, Ko2cubeObservation, Ko2cubeState]):
     """

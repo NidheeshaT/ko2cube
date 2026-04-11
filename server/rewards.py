@@ -142,8 +142,9 @@ class RewardBreakdown:
 
     @property
     def total(self) -> float:
-        return (self.sla + self.carbon + self.cost
-                + self.waste + self.shaping + self.terminal)
+        # Ensure no None types have slipped into the components
+        vals = [self.sla, self.carbon, self.cost, self.waste, self.shaping, self.terminal]
+        return sum(v for v in vals if v is not None)
 
     def to_dict(self) -> Dict[str, float]:
         return {
@@ -278,7 +279,7 @@ def compute_step_reward(
                         inst for inst in region_info.available_instances
                         if inst.cpu_cores >= job.cpu_cores and inst.memory_gb >= job.memory_gb
                     ]
-                    if valid_instances:
+                    if valid_instances and job.eta_minutes is not None:
                         runtime_hours = job.eta_minutes / 60.0
                         # Find the cheapest price (using the same machine_type preference)
                         ideal_unit_price = min(

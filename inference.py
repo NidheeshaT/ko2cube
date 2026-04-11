@@ -108,20 +108,20 @@ def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+def log_step(task_id: str, step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
     error_val = error if error else "null"
     done_val = str(done).lower()
     # Compact action string for the strictly required log format
     action_log = action.replace("\n", "").replace(" ", "")[:200]
     print(
-        f"[STEP] step={step} action={action_log} reward={reward:.2f} done={done_val} error={error_val}",
+        f"[STEP] task={task_id} step={step} action={action_log} reward={reward:.2f} done={done_val} error={error_val}",
         flush=True,
     )
 
 
-def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+def log_end(task_id: str, success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
+    print(f"[END] task={task_id} success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
 
 
 def build_user_prompt(step: int, obs: dict, last_reward: float, history: List[str]) -> str:
@@ -172,37 +172,40 @@ def parse_llm_response(text: str) -> str:
         text = text.split("```")[1].split("```")[0].strip()
     
     # Try to find JSON braces if there's surrounding text
-    match = re.search(r'(\{.*\})', text, re.DOTALL)
-    if match:
-        text = match.group(1)
+    matches = re.findall(r'(\{.*\})', text, re.DOTALL)
+    if matches:
+        # Take the most likely assignment JSON (usually the last or largest)
+        text = max(matches, key=len)
         
-    return text
+    return text.strip()
 
 
 async def get_model_message(client: AsyncOpenAI, step: int, obs: dict, last_reward: float, history: List[str]) -> str:
     user_prompt = build_user_prompt(step, obs, last_reward, history)
     for i in range(3):
         try:
-            completion = await client.chat.completions.create(
+            completion = await client.chat.completions.parse(
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.1, # Conservative for scheduling
-                max_tokens=MAX_TOKENS
+                max_tokens=MAX_TOKENS,
+                reasoning_effort="none",
+                response_format=Ko2cubeAction
             )
-            raw_text = completion.choices[0].message.content or ""
-            json_text = parse_llm_response(raw_text)
             
             # Validation
-            Ko2cubeAction.model_validate_json(json_text)
-            return json_text
+            action_obj = completion.choices[0].message.parsed
+            if not action_obj:
+                raise ValueError("LLM failed to return a valid Ko2cubeAction object.")
+            return action_obj
         except Exception as e:
             print(f"  [DEBUG] LLM parsing/API retry {i+1}: {e}")
             traceback.print_exc()
             
-    return '{"assignments": []}'
+    return Ko2cubeAction(assignments=[])
 
 
 async def _connect_env(image_name: str) -> Ko2cubeEnv:
@@ -215,36 +218,20 @@ async def _connect_env(image_name: str) -> Ko2cubeEnv:
     return env
 
 
-async def run_episode(client: AsyncOpenAI, task_id: str) -> None:
-    env = None
+async def run_episode(client: AsyncOpenAI, base_url: str, task_id: str) -> None:
+    env = Ko2cubeEnv(base_url=base_url)
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
-    score = 0.0
+    score = 0.01
     success = False
 
     log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
 
-    MAX_CONNECT_RETRIES = 3
-
     try:
-        # Retry connection in case of WebSocket keepalive timeouts
-        for attempt in range(1, MAX_CONNECT_RETRIES + 1):
-            try:
-                env = await _connect_env(LOCAL_IMAGE_NAME)
-                result = await env.reset(task_id=task_id)
-                break
-            except Exception as conn_err:
-                print(f"  [WARN] Connection attempt {attempt}/{MAX_CONNECT_RETRIES} failed: {conn_err}")
-                if env:
-                    try:
-                        await env.close()
-                    except Exception:
-                        pass
-                    env = None
-                if attempt == MAX_CONNECT_RETRIES:
-                    raise
-                await asyncio.sleep(2 * attempt)  # back-off before retry
+        # Connect to the shared environment server
+        await env.connect()
+        result = await env.reset(task_id=task_id)
 
         obs_dict = result.observation.model_dump()
         last_reward = 0.0
@@ -253,8 +240,7 @@ async def run_episode(client: AsyncOpenAI, task_id: str) -> None:
             if result.done:
                 break
 
-            action_json = await get_model_message(client, step, obs_dict, last_reward, history)
-            action_obj = Ko2cubeAction.model_validate_json(action_json)
+            action_obj = await get_model_message(client, step, obs_dict, last_reward, history)
 
             try:
                 result = await env.step(action_obj)
@@ -270,7 +256,7 @@ async def run_episode(client: AsyncOpenAI, task_id: str) -> None:
             steps_taken = step
             last_reward = reward
 
-            log_step(step=step, action=action_json, reward=reward, done=result.done, error=None)
+            log_step(task_id=task_id, step=step, action=action_obj.model_dump_json(), reward=reward, done=result.done, error=None)
             history.append(f"Step {step}: {len(action_obj.assignments)} actions -> reward {reward:+.2f}")
 
             if result.done:
@@ -291,19 +277,35 @@ async def run_episode(client: AsyncOpenAI, task_id: str) -> None:
                 await env.close()
             except Exception:
                 pass
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+        log_end(task_id=task_id, success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 async def main() -> None:
-    """Main entry point iterating through all tasks."""
+    """Main entry point running tasks in parallel using a shared container."""
     client = AsyncOpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN, timeout=15.0)
 
-    print(f"🚀 Starting Ko2cube Inference Baseline", flush=True)
+    print(f"🚀 Starting Ko2cube Inference Baseline (Parallel Shared)", flush=True)
     print(f"📡 API: {API_BASE_URL} | Model: {MODEL_NAME}", flush=True)
 
-    for task in TASKS:
-        await run_episode(client, task)
-        await asyncio.sleep(2)  # brief pause between tasks
+    shared_env = None
+    try:
+        shared_env = await _connect_env(LOCAL_IMAGE_NAME)
+        # Retrieve the URL from the shared container (convert ws://... back to http://...)
+        base_url = shared_env._ws_url.replace("ws://", "http://").replace("/ws", "")
+        print(f"🌍 Shared environment live at {base_url}", flush=True)
+
+        # Run tasks in parallel against the shared server
+        await asyncio.gather(*(run_episode(client, base_url, task) for task in TASKS))
+    
+    except KeyboardInterrupt:
+        print("\n⚠️ Interrupted by user. Shutting down...", flush=True)
+    finally:
+        if shared_env:
+            print(f"🛑 Cleaning up shared environment and killing container...", flush=True)
+            try:
+                await shared_env.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

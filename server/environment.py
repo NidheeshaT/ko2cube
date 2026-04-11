@@ -49,6 +49,7 @@ class Ko2cubeEnvironment(Environment):
                 self._timeseries.append(row)
         
         # Scenario management
+        self._scenario: Optional[Scenario] = None
         self._reset_count = 0
         self._job_queue: List[Job] = []
         self._active_jobs: List[RunningJob] = []
@@ -68,7 +69,8 @@ class Ko2cubeEnvironment(Environment):
         task = task_id or os.environ.get("KO2CUBE_TASK", "easy")
         
         # Deep copy the scenario to avoid shared state between episodes
-        scenario: Scenario = copy.deepcopy(get_scenario(task))
+        self._scenario = copy.deepcopy(get_scenario(task))
+        scenario = self._scenario
 
         self._state = self._init_state()
         self._state.task_id = task
@@ -108,10 +110,10 @@ class Ko2cubeEnvironment(Environment):
     def step(self, action: Ko2cubeAction) -> Ko2cubeObservation: # type: ignore[override]
         """Executes one step in the environment."""
         current_step = self._state.current_step
-        task = os.environ.get("KO2CUBE_TASK", "easy")
-        # Note: We use the scenario reference from state if we wanted to be perfectly isolated,
-        # but for simplicity we reload the template. Deepcopy in reset ensures job_pool is fresh.
-        scenario = get_scenario(task) 
+        scenario = self._scenario
+        if not scenario:
+            raise RuntimeError("Environment must be reset before calling step().")
+        
         regions = self._build_regions(scenario, current_step)
 
         # Snapshot before mutation
@@ -315,6 +317,13 @@ class Ko2cubeEnvironment(Environment):
                 continue
                 
             # Define window
+            if job.eta_minutes is None:
+                job.baseline_carbon_intensity = 0.0
+                job.baseline_spot_price = 0.0
+                job.theoretical_min_carbon = 0.0
+                job.theoretical_min_cost = 0.0
+                continue
+
             runtime_h = job.eta_minutes / 60.0
             cpu_factor = max(job.cpu_cores, 1.0)
             window_steps = range(job.sla_start, job.sla_end + 1)
@@ -354,8 +363,12 @@ class Ko2cubeEnvironment(Environment):
                         abs_min_price = current_spot_p
             
             # Save baselines
-            job.baseline_carbon_intensity = total_intensity / divisor
-            job.baseline_spot_price = ideal_base_price * (total_multiplier / divisor)
+            if divisor > 0:
+                job.baseline_carbon_intensity = total_intensity / divisor
+                job.baseline_spot_price = ideal_base_price * (total_multiplier / divisor)
+            else:
+                job.baseline_carbon_intensity = 0.0
+                job.baseline_spot_price = 0.0
             
             # Save theoretical minimums for the Grader normalization
             job.theoretical_min_carbon = abs_min_carbon_intensity * runtime_h * cpu_factor
@@ -382,8 +395,10 @@ class Ko2cubeEnvironment(Environment):
 
     def get_observation(self) -> Ko2cubeObservation:
         """Returns the current observation without advancing the simulation."""
-        task = os.environ.get("KO2CUBE_TASK", "easy")
-        scenario = get_scenario(task)
+        scenario = self._scenario
+        if not scenario:
+            raise RuntimeError("Environment must be reset before calling get_observation().")
+            
         return Ko2cubeObservation(
             current_step=self._state.current_step,
             job_queue=list(self._job_queue),
