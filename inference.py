@@ -268,8 +268,8 @@ async def run_episode(client: AsyncOpenAI, base_url: str, task_id: str) -> List[
 
         # Calculate final metrics
         total_reward = sum(rewards)
-        # Normalize score and clamp strictly within [0, 1] per validator requirements
-        score = max(0.0, min(1.0, total_reward / MAX_TOTAL_REWARD))
+        # Normalize score and clamp strictly within (0.01, 0.99) per validator requirements
+        score = max(0.01, min(0.99, total_reward / MAX_TOTAL_REWARD))
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     except Exception as e:
