@@ -53,7 +53,7 @@ async def get_session_score():
     """
     Dummy score for validation and debugging
     """
-    return 0.02
+    return {"score": 0.02}
 
 
 def main(host: str = "0.0.0.0", port: int = 8000):
