@@ -182,13 +182,16 @@ class Ko2cubeEnvironment(Environment):
         # 4. Reward & Potential Computation
         phi_after = _potential(self._state)
         # We pass both potentials to ensure accurate marginal reward computation
+        # Pass current_step explicitly — state.current_step hasn't been incremented yet
+        # so it equals the step we just processed. This prevents an off-by-one in SLA checks.
         rb = compute_step_reward(
             assignments=action.assignments,
             queue=queue_snapshot,
             regions=regions,
             state=self._state,
             phi_before=phi_before,
-            phi_after=phi_after
+            phi_after=phi_after,
+            current_step=current_step,
         )
 
         # 5. Transition to next step
