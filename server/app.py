@@ -45,7 +45,7 @@ app = create_app(
     Ko2cubeAction,
     Ko2cubeObservation,
     env_name="ko2cube_env",
-    max_concurrent_envs=4,
+    max_concurrent_envs=10,
 )
 
 @app.get("/score")

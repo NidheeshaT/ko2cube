@@ -44,12 +44,19 @@ class Ko2cubeEnvironment(Environment):
             self._infra_config = json.load(f)
             
         # Load timeseries
-        self._timeseries = []
+        self._timeseries_map: Dict[str, List[float]] = {}
         csv_path = os.path.join(self._data_dir, "cleaned_timeseries_data.csv")
         with open(csv_path, "r") as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                self._timeseries.append(row)
+            rows = list(reader)
+            if rows:
+                # Pre-index all region carbon and spot multipliers for O(1) loop access
+                for rname in self._infra_config["regions"]:
+                    self._timeseries_map[f"carbon_{rname}"] = [float(row.get(f"carbon_{rname}", 0.0)) for row in rows]
+                    self._timeseries_map[f"spot_mult_{rname}"] = [float(row.get(f"spot_mult_{rname}", 1.0)) for row in rows]
+                self._timeseries_len = len(rows)
+            else:
+                 self._timeseries_len = 0
         
         # Scenario management
         self._scenario: Optional[Scenario] = None
@@ -58,6 +65,8 @@ class Ko2cubeEnvironment(Environment):
         self._active_jobs: List[RunningJob] = []
         self._deferred: Dict[str, int] = {} # job_id -> step to retry
         self._state = self._init_state()
+
+        # Persistent KWOK adapter for the entire session
         self._kwok = KWOKAdapter(cluster_prefix=self._state.episode_id)
 
     def _init_state(self) -> Ko2cubeState:
@@ -69,14 +78,34 @@ class Ko2cubeEnvironment(Environment):
         )
 
     def reset(self, task_id: Optional[str] = None) -> Ko2cubeObservation:
-        """Resets the environment for a new episode."""
+        """Resets the environment for a new episode by clearing resources rather than recreating clusters."""
+        # Fast clearing of resources in existing clusters
+        if self._kwok:
+            try:
+                self._kwok.reset_clusters()
+            except Exception as e:
+                print(f"Failed to reset clusters during reset: {e}")
+
         task = task_id or os.environ.get("KO2CUBE_TASK", "easy")
         
-        # Deep copy the scenario to avoid shared state between episodes
-        self._scenario = copy.deepcopy(get_scenario(task))
+        # Avoid expensive copy.deepcopy on the whole scenario object.
+        # Instead, get a fresh copy of the jobs.
+        base_scenario = get_scenario(task)
+        self._scenario = Scenario(
+            name=base_scenario.name,
+            difficulty=base_scenario.difficulty,
+            description=base_scenario.description,
+            total_steps=base_scenario.total_steps,
+            step_duration_minutes=base_scenario.step_duration_minutes,
+            lookahead_steps=base_scenario.lookahead_steps,
+            regions=base_scenario.regions,
+            job_pool=[j.model_copy(deep=True) for j in base_scenario.job_pool]
+        )
         scenario = self._scenario
 
         self._state = self._init_state()
+        # Note: We reuse the cluster prefix from the initial session
+
         self._state.task_id = task
         self._state.scenario_name = scenario.name
         self._state.difficulty = scenario.difficulty
@@ -271,8 +300,7 @@ class Ko2cubeEnvironment(Environment):
 
     def _build_regions(self, scenario: Scenario, step: int) -> Dict[str, RegionInfo]:
         """Constructs the regional observation data for a specific step."""
-        data_idx = step % len(self._timeseries)
-        data = self._timeseries[data_idx]
+        data_idx = step % self._timeseries_len
         lookahead = scenario.lookahead_steps
         
         regions = {}
@@ -283,12 +311,12 @@ class Ko2cubeEnvironment(Environment):
             # Extract carbon forecast
             hist_vals = []
             for i in range(lookahead):
-                idx = (step + i) % len(self._timeseries)
-                v = self._timeseries[idx].get(f"carbon_{rname}", 0.1)
+                idx = (step + i) % self._timeseries_len
+                v = self._timeseries_map[f"carbon_{rname}"][idx]
                 hist_vals.append(float(v))
                 
             # Create instance list with current spot prices
-            spot_mult = float(data.get(f"spot_mult_{rname}", 1.0))
+            spot_mult = self._timeseries_map[f"spot_mult_{rname}"][data_idx]
             instances = []
             for inst in self._infra_config["instances"]:
                 instances.append(InstanceType(
@@ -436,11 +464,10 @@ class Ko2cubeEnvironment(Environment):
             ideal_base_price = min(fitting_prices) if fitting_prices else 0.0
             
             for t in window_steps:
-                idx = t % len(self._timeseries)
-                row = self._timeseries[idx]
+                idx = t % self._timeseries_len
                 for rname in regions_list:
-                    c = float(row.get(f"carbon_{rname}", 0.0))
-                    m = float(row.get(f"spot_mult_{rname}", 1.0))
+                    c = self._timeseries_map[f"carbon_{rname}"][idx]
+                    m = self._timeseries_map[f"spot_mult_{rname}"][idx]
                     
                     total_intensity += c
                     total_multiplier += m

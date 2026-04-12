@@ -13,6 +13,11 @@ from ko2cube.server.kwok.config import (
 from ko2cube.models import K8sResource, K8sNode, K8sPod, DeleteResource, DeleteNode, DeletePod
 from ko2cube.server.kwok.error import KWOKError
 
+# Track if global cleanup has been registered to avoid redundant atexit calls
+_KWOK_CLEANUP_REGISTERED = False
+# track all clusters created across all instances to ensure proper cleanup at exit
+_CREATED_CLUSTERS = set()
+
 class KWOKAdapter:
     """
     KWOKAdapter provides a high-level API for managing simulated Kubernetes clusters using KWOK.
@@ -41,26 +46,28 @@ class KWOKAdapter:
     def cleanup_all_clusters():
         """
         Global cleanup function registered with atexit.
-        Queries kwokctl for all active clusters and deletes them to ensure
-        no simulated resources are left behind when the process terminates.
+        Only deletes clusters that were explicitly created by this process.
         """
-        try:
-            # Query kwokctl for all currently running clusters
-            result = subprocess.run(["kwokctl", "get", "clusters"], capture_output=True, text=True, check=True)
-            clusters = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-            if clusters:
-                print(f"\n[KWOK] Detected {len(clusters)} active clusters. Starting cleanup...")
-                for cluster in clusters:
-                    print(f"[KWOK] Deleting cluster: {cluster}")
-                    subprocess.run(["kwokctl", "delete", "cluster", "--name", cluster], check=False)
-                print("[KWOK] Cleanup complete.")
-        except Exception as e:
-            # Use simple print as logging might already be shut down during exit
-            print(f"[KWOK] Automatic cleanup failed: {e}")
+        global _CREATED_CLUSTERS
+        if _CREATED_CLUSTERS:
+            print(f"\n[KWOK] Cleaning up {len(_CREATED_CLUSTERS)} clusters created this session...")
+            for cluster in list(_CREATED_CLUSTERS):
+                print(f"[KWOK] Deleting cluster: {cluster}")
+                subprocess.run(["kwokctl", "delete", "cluster", "--name", cluster], check=False)
+            _CREATED_CLUSTERS.clear()
+            print("[KWOK] Global cleanup complete.")
+        else:
+            print("[KWOK] No clusters to clean up.")
+
+    _CLUSTER_CACHE = None
+    _CURRENT_CONTEXT = None
 
     def __init__(self, cluster_prefix: str = None):
-        # Register global cleanup to run on process exit
-        atexit.register(self.cleanup_all_clusters)
+        global _KWOK_CLEANUP_REGISTERED
+        if not _KWOK_CLEANUP_REGISTERED:
+            # Register global cleanup to run on process exit
+            atexit.register(self.cleanup_all_clusters)
+            _KWOK_CLEANUP_REGISTERED = True
 
         self.cluster_prefix = cluster_prefix
 
@@ -84,6 +91,7 @@ class KWOKAdapter:
                 # Use check=False to avoid crashing if cluster already exists
                 subprocess.run(["kwokctl", "create", "cluster", "--name", full_name], check=False)
                 self.active_clusters.append(full_name)
+                _CREATED_CLUSTERS.add(full_name)
             except Exception as e:
                 print(f"Failed to start cluster {region}: {e}")
 
@@ -93,11 +101,40 @@ class KWOKAdapter:
             return f"{self.cluster_prefix}-{region}"
         return region
 
+    def __del__(self):
+        """Cleanup clusters when the adapter object is deleted."""
+        try:
+            self.cleanup()
+        except Exception:
+            # Avoid errors during interpreter shutdown
+            pass
+
     def cleanup(self):
         """Manually trigger the deletion of all clusters tracked by this adapter."""
+        global _CREATED_CLUSTERS
         for cluster in self.active_clusters:
              subprocess.run(["kwokctl", "delete", "cluster", "--name", cluster], check=False)
+             _CREATED_CLUSTERS.discard(cluster)
         self.active_clusters = []
+        KWOKAdapter._CLUSTER_CACHE = None
+        KWOKAdapter._CURRENT_CONTEXT = None
+
+    def reset_clusters(self):
+        """Delete all pods and nodes across all active clusters without deleting the clusters themselves."""
+        print(f"[KWOK] Fast-clearing resources in {len(self.active_clusters)} clusters...")
+        for cluster in self.active_clusters:
+            self._load_config(cluster)
+            try:
+                # Delete all pods first (no-wait to speed up)
+                subprocess.run(["kubectl", "delete", "pods", "--all", "-A", "--wait=false"], check=False)
+                # Delete all nodes (no-wait to speed up)
+                subprocess.run(["kubectl", "delete", "nodes", "--all", "--wait=false"], check=False)
+                print(f"[KWOK] Resources cleared in cluster: {cluster}")
+            except Exception as e:
+                print(f"Failed to reset resources in cluster {cluster}: {e}")
+        
+        # Invalidate state caches
+        KWOKAdapter._CLUSTER_CACHE = None
 
     def delete_cluster(self, region: str):
         """Delete a specific cluster by region name."""
@@ -107,14 +144,21 @@ class KWOKAdapter:
             subprocess.run(["kwokctl", "delete", "cluster", "--name", cluster_name], check=True)
             if cluster_name in self.active_clusters:
                 self.active_clusters.remove(cluster_name)
+            _CREATED_CLUSTERS.discard(cluster_name)
+            KWOKAdapter._CLUSTER_CACHE = None # Invalidate cache
         except Exception as e:
             print(f"Failed to delete cluster {cluster_name}: {e}")
 
     def _load_config(self, cluster_name: str):
-        """Load kubeconfig context for the specified region cluster."""
+        """Load kubeconfig context for the specified region cluster with caching."""
+        target_context = f"kwok-{cluster_name}"
+        if KWOKAdapter._CURRENT_CONTEXT == target_context:
+            return
+
         try:
             # kwokctl typically creates contexts named 'kwok-<name>'
-            config.load_kube_config(context=f"kwok-{cluster_name}")
+            config.load_kube_config(context=target_context)
+            KWOKAdapter._CURRENT_CONTEXT = target_context
         except Exception as e:
             print(f"Failed to load kubeconfig context for cluster {cluster_name}: {e}")
 
@@ -303,13 +347,17 @@ class KWOKAdapter:
             except Exception as e:
                 print(f"[KWOK] Failed to delete resource: {e}")
 
-    def get_clusters(self):
-        """Return a list of all active regional clusters using kwokctl."""
+    def get_clusters(self, refresh=False):
+        """Return a list of all active regional clusters using kwokctl with caching."""
+        if not refresh and KWOKAdapter._CLUSTER_CACHE is not None:
+            return KWOKAdapter._CLUSTER_CACHE
+
         try:
             # kwokctl get clusters returns one name per line by default
             result = subprocess.run(["kwokctl", "get", "clusters"], capture_output=True, text=True, check=True)
             clusters = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-            return [{"name": c, "region": c} for c in clusters]
+            KWOKAdapter._CLUSTER_CACHE = [{"name": c, "region": c} for c in clusters]
+            return KWOKAdapter._CLUSTER_CACHE
         except Exception as e:
             print(f"Failed to get clusters from kwokctl: {e}")
             # Fallback to tracked clusters if CLI fails
