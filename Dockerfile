@@ -11,6 +11,45 @@
 # The build script (openenv build) handles context detection and sets appropriate build args.
 
 ARG BASE_IMAGE=ghcr.io/meta-pytorch/openenv-base:latest
+
+FROM ${BASE_IMAGE} AS kwok-builder
+
+# Install dependencies needed for downloading
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fetch latest versions and download binaries sequentially for stability
+RUN set -x && \
+    ARCH=$(uname -m) && \
+    case "${ARCH}" in \
+    x86_64) ARCH=amd64 ;; \
+    aarch64) ARCH=arm64 ;; \
+    esac && \
+    # Get latest version tags
+    K8S_VERSION=$(curl -sfL https://dl.k8s.io/release/stable.txt) && \
+    KWOK_REPO=kubernetes-sigs/kwok && \
+    KWOK_LATEST_RELEASE=$(curl -sf "https://api.github.com/repos/${KWOK_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/') && \
+    # Download tools sequentially using the -f (fail) flag for safety
+    curl -sfL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${K8S_VERSION}/bin/linux/${ARCH}/kubectl" && \
+    curl -sfL -o /usr/local/bin/kwok "https://github.com/${KWOK_REPO}/releases/download/${KWOK_LATEST_RELEASE}/kwok-linux-${ARCH}" && \
+    curl -sfL -o /usr/local/bin/kwokctl "https://github.com/${KWOK_REPO}/releases/download/${KWOK_LATEST_RELEASE}/kwokctl-linux-${ARCH}" && \
+    chmod +x /usr/local/bin/kubectl /usr/local/bin/kwok /usr/local/bin/kwokctl
+
+# Pre-download Kubernetes components into kwokctl cache using a cache mount for speed
+RUN --mount=type=cache,target=/root/.kwok/cache \
+    set -x && \
+    ARCH=$(uname -m) && \
+    case "${ARCH}" in x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; esac && \
+    # Force download of required components
+    KWOK_KUBE_VERSION=v1.33.0 kwokctl create cluster --name=pre-download-cache --runtime=binary || true && \
+    # "Bake" the cache into a persistent directory so it's saved in the image layer
+    mkdir -p /root/.kwok_baked && \
+    cp -rp /root/.kwok/* /root/.kwok_baked/ && \
+    # Verify we found the binaries
+    find /root/.kwok_baked -name kube-apiserver
+
 FROM ${BASE_IMAGE} AS builder
 
 WORKDIR /app
@@ -58,6 +97,18 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Kubernetes tools and baked artifacts from kwok-builder
+COPY --from=kwok-builder /usr/local/bin/kubectl /usr/local/bin/kubectl
+COPY --from=kwok-builder /usr/local/bin/kwok /usr/local/bin/kwok
+COPY --from=kwok-builder /usr/local/bin/kwokctl /usr/local/bin/kwokctl
+COPY --from=kwok-builder /root/.kwok_baked /root/.kwok
 
 # Copy the virtual environment from builder
 COPY --from=builder /app/env/.venv /app/.venv
