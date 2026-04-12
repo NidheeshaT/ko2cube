@@ -10,7 +10,9 @@ requires-python = ">=3.10"
 dependencies = [
     "openenv-core>=0.2.3",
     "fastapi>=0.115.0",
-    "uvicorn>=0.24.0"
+    "uvicorn>=0.24.0",
+    "kubernetes",
+    "pyyaml"
 ]
 
 [tool.setuptools.package-dir]
@@ -18,7 +20,7 @@ ko2cube = "."
 
 [tool.setuptools]
 include-package-data = true
-packages = ["ko2cube", "ko2cube.server", "ko2cube.server.data"]
+packages = ["ko2cube", "ko2cube.server", "ko2cube.server.data", "ko2cube.server.kwok"]
 
 [tool.setuptools.package-data]
 "ko2cube.server.data" = ["*.csv", "*.json"]
