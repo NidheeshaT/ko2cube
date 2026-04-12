@@ -30,7 +30,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 os.environ["PATH"] = f"/opt/homebrew/bin:/usr/local/bin:{os.environ.get('PATH', '')}"
 
 from ko2cube.server.kwok.kwok import KWOKAdapter
-from ko2cube.server.kwok.models import K8sNode, K8sPod, K8sMetadata, K8sPodSpec, DeleteNode, DeletePod
+from ko2cube.models import K8sNode, K8sPod, K8sMetadata, K8sPodSpec, DeleteNode, DeletePod
 from ko2cube.server.kwok.error import (
     KWOKError, NodeValidationError, PodValidationError, InstanceTypeError
 )

@@ -12,7 +12,7 @@ from openenv.core.env_server.types import State
 from ko2cube.models import (
     Ko2cubeAction, Ko2cubeObservation, Ko2cubeState,
     Job, RunningJob, RegionInfo, CarbonData, InstanceType,
-    JobAssignment, ALWAYS_ON,
+    JobAssignment, ClusterState, ALWAYS_ON,
 )
 from ko2cube.server.rewards import (
     compute_step_reward, compute_terminal_reward,
@@ -58,7 +58,7 @@ class Ko2cubeEnvironment(Environment):
         self._active_jobs: List[RunningJob] = []
         self._deferred: Dict[str, int] = {} # job_id -> step to retry
         self._state = self._init_state()
-        self._kwok = KWOKAdapter()
+        self._kwok = KWOKAdapter(cluster_prefix=self._state.episode_id)
 
     def _init_state(self) -> Ko2cubeState:
         return Ko2cubeState(
@@ -98,16 +98,9 @@ class Ko2cubeEnvironment(Environment):
         # Surface jobs arriving at step 0
         self._surface_arriving_jobs(scenario, 0)
         
-        regions = self._build_regions(scenario, 0)
-
-        return Ko2cubeObservation(
+        return self._build_observation(
             current_step=0,
-            job_queue=list(self._job_queue),
-            active_jobs=list(self._active_jobs),
-            regions=regions,
             last_action_result="Episode started.",
-            done=False,
-            reward=0.01,
             metadata={"scenario": scenario.name}
         )
 
@@ -126,6 +119,38 @@ class Ko2cubeEnvironment(Environment):
         queue_snapshot = list(self._job_queue)
         assignment_map = {a.job_id: a for a in action.assignments}
         result_parts = []
+        kwok_errors_this_step = 0
+
+        # 0. Process explicit resource actions
+        for region, resources in (action.resources_to_create or {}).items():
+            if not resources:
+                continue
+            try:
+                self._kwok.create_from_dict(resources, region)
+                result_parts.append(f"KWOK: created {len(resources)} resources in '{region}'")
+            except KWOKError as e:
+                kwok_errors_this_step += 1
+                self._state.kwok_errors += 1
+                result_parts.append(f"KWOK: create failed in '{region}' [{type(e).__name__}]: {e}")
+            except Exception as e:
+                kwok_errors_this_step += 1
+                self._state.kwok_errors += 1
+                result_parts.append(f"KWOK: create error in '{region}': {e}")
+
+        for region, resources in (action.resources_to_delete or {}).items():
+            if not resources:
+                continue
+            try:
+                self._kwok.delete_from_dict(resources, region)
+                result_parts.append(f"KWOK: deleted {len(resources)} resources from '{region}'")
+            except KWOKError as e:
+                kwok_errors_this_step += 1
+                self._state.kwok_errors += 1
+                result_parts.append(f"KWOK: delete failed in '{region}' [{type(e).__name__}]: {e}")
+            except Exception as e:
+                kwok_errors_this_step += 1
+                self._state.kwok_errors += 1
+                result_parts.append(f"KWOK: delete error in '{region}': {e}")
 
         # 1. Process agent decisions
         for job in list(self._job_queue):
@@ -163,7 +188,6 @@ class Ko2cubeEnvironment(Environment):
 
         # 2. Tick active jobs
         still_running = []
-        kwok_errors_this_step = 0  # count pod deletions that failed this step
         for rj in self._active_jobs:
             rj.steps_remaining -= 1
             if rj.steps_remaining <= 0:
@@ -237,11 +261,8 @@ class Ko2cubeEnvironment(Environment):
         # Clamp step reward strictly within (0, 1)
         clamped_reward = max(0.01, min(0.99, round(rb.total, 4)))
 
-        return Ko2cubeObservation(
+        return self._build_observation(
             current_step=next_step,
-            job_queue=list(self._job_queue),
-            active_jobs=list(self._active_jobs),
-            regions=self._build_regions(scenario, next_step),
             last_action_result=" | ".join(result_parts) or "Clock ticked.",
             done=done,
             reward=clamped_reward,
@@ -285,6 +306,49 @@ class Ko2cubeEnvironment(Environment):
                 available_instances=instances
             )
         return regions
+
+    def _get_infra_state(self) -> Dict[str, ClusterState]:
+        """Fetch current nodes and pods from KWOK and group them by cluster."""
+        try:
+            nodes = self._kwok.get_nodes()
+            pods = self._kwok.get_pods()
+            
+            infra = {}
+            # Group by the actual active cluster names (which include prefix if any)
+            for cluster in self._kwok.active_clusters:
+                infra[cluster] = ClusterState(
+                    nodes=[n for n in nodes if n["cluster"] == cluster],
+                    pods=[p for p in pods if p["cluster"] == cluster]
+                )
+            return infra
+        except Exception as e:
+            print(f"Failed to fetch infra state: {e}")
+            return {}
+
+    def _build_observation(
+        self, 
+        current_step: int, 
+        last_action_result: str, 
+        done: bool = False, 
+        reward: float = 0.0, 
+        metadata: dict = None
+    ) -> Ko2cubeObservation:
+        """Centralized helper to construct the full observation object."""
+        scenario = self._scenario
+        if not scenario:
+            raise RuntimeError("Environment must be reset before building observation.")
+
+        return Ko2cubeObservation(
+            current_step=current_step,
+            job_queue=list(self._job_queue),
+            active_jobs=list(self._active_jobs),
+            regions=self._build_regions(scenario, current_step),
+            infra_clusters=self._get_infra_state(),
+            last_action_result=last_action_result,
+            done=done,
+            reward=reward,
+            metadata=metadata or {}
+        )
 
     def _try_schedule(self, job: Job, assignment: JobAssignment, regions: Dict[str, RegionInfo]) -> tuple[bool, str]:
         """Validate requirements and update state in case of success."""
@@ -422,19 +486,10 @@ class Ko2cubeEnvironment(Environment):
 
     def get_observation(self) -> Ko2cubeObservation:
         """Returns the current observation without advancing the simulation."""
-        scenario = self._scenario
-        if not scenario:
-            raise RuntimeError("Environment must be reset before calling get_observation().")
-            
-        return Ko2cubeObservation(
+        return self._build_observation(
             current_step=self._state.current_step,
-            job_queue=list(self._job_queue),
-            active_jobs=list(self._active_jobs),
-            regions=self._build_regions(scenario, self._state.current_step),
             last_action_result="Observation retrieved.",
-            done=self._state.is_done,
-            reward=0.0,
-            metadata={}
+            done=self._state.is_done
         )
 
     def grader_score(self) -> float:

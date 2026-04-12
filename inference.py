@@ -64,7 +64,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen3.5-9B:together")
 TASK_NAME = os.getenv("MY_ENV_V4_TASK", "ko2cube")
 BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "ko2cube")
-MAX_STEPS = 50
+MAX_STEPS = 4
 TEMPERATURE = 0.7
 MAX_TOKENS = 750
 SUCCESS_SCORE_THRESHOLD = 0.1
@@ -80,24 +80,40 @@ SYSTEM_PROMPT = textwrap.dedent(
     1. A Current Job Queue (jobs waiting to be scheduled).
     2. Regional Data (carbon intensity forecasts and instance pricing/availability).
     
-    You must decide for EVERY job in the queue:
-    - schedule: Place the job in a region + instance type now.
-    - defer: Wait for a cleaner/cheaper window (only if job allows).
-    - drop: Terminate the job (SLA violation).
+    Capabilities:
+    - Job Assignments: Decide for EVERY job in the queue (schedule, defer, or drop).
+    - Infrastructure Management: You can explicitly CREATE or DELETE Kubernetes resources (Nodes/Pods) in any region to manage capacity.
     
     Strategy:
     - Prioritize jobs near their SLA deadline.
     - Place compute-heavy jobs in regions with low solar/wind carbon intensity.
     - Use 'spot' instances for savings, but prefer 'on-demand' for critical always-on jobs.
+    - Provision nodes in a region before scheduling jobs there if capacity is tight.
+    
+    REFERENCE EXAMPLES for resources_to_create and resources_to_delete items:
+    - Create Node: {"kind": "Node", "metadata": {"name": "n1", "labels": {"node.kubernetes.io/instance-type": "m5.large"}}}
+    - Create Pod:  {"kind": "Pod", "metadata": {"name": "p1"}, "spec": {"containers": [{"name": "c1", "image": "nginx", "resources": {"requests": {"cpu": "1", "memory": "1Gi"}}}]}}
+    - Delete Node: {"kind": "Node", "name": "n1"}
+    - Delete Pod:  {"kind": "Pod", "name": "p1"}
     
     RESPONSE FORMAT:
-    You must respond with a raw JSON object containing an "assignments" list.
-    Example:
+    You must respond with a raw JSON object matching this structure:
     {
       "assignments": [
         {"job_id": "job_1", "decision": "schedule", "region": "us-east-1", "instance_type": "m5.large", "machine_type": "spot"},
         {"job_id": "job_2", "decision": "defer", "defer_to_step": 5}
-      ]
+      ],
+      "resources_to_create": {
+        "us-east-1": [
+          {
+            "kind": "Node",
+            "metadata": {"name": "node-1", "labels": {"node.kubernetes.io/instance-type": "m5.xlarge"}}
+          }
+        ]
+      },
+      "resources_to_delete": {
+        "us-east-1": []
+      }
     }
     
     Respond ONLY with the raw JSON object. No markdown, no reasoning text.
@@ -300,8 +316,12 @@ async def main() -> None:
         base_url = shared_env._ws_url.replace("ws://", "http://").replace("/ws", "")
         print(f"🌍 Shared environment live at {base_url}", flush=True, file=sys.stderr)
 
-        # Run tasks in parallel against the shared server
-        task_results = await asyncio.gather(*(run_episode(client, base_url, task) for task in TASKS))
+        # task_results = await asyncio.gather(*(run_episode(client, base_url, task) for task in TASKS))
+        # Run tasks sequentially against the shared server
+        task_results = []
+        for task in TASKS:
+            result = await run_episode(client, base_url, task)
+            task_results.append(result)
         
         # Finally, print logs in order
         for episode_logs in task_results:

@@ -1,3 +1,4 @@
+from typing import Union
 from typing import List, Optional, Literal, Dict
 from pydantic import BaseModel, Field
 
@@ -59,6 +60,10 @@ class RunningJob(BaseModel):
     machine_type: str = Field(..., description="Machine type the job is using")
 
 # Main Request / Response Models
+class ClusterState(BaseModel):
+    nodes: List[dict] = Field(default_factory=list)
+    pods: List[dict] = Field(default_factory=list)
+
 class Ko2cubeObservation(Observation):
     """
     The observation returned to the agent at every step.
@@ -68,6 +73,10 @@ class Ko2cubeObservation(Observation):
     job_queue: List[Job] = Field(..., description="List of jobs currently waiting to be scheduled")
     active_jobs: List[RunningJob] = Field(..., description="List of jobs actively running in the simulated cluster")
     regions: Dict[str, RegionInfo] = Field(..., description="Data about carbon and pricing per region")
+    infra_clusters: Dict[str, ClusterState] = Field(
+        default_factory=dict, 
+        description="Current K8s nodes and pods grouped by cluster name"
+    )
     last_action_result: str = Field(
         default="",
         description="Human readable result of last action."
@@ -97,6 +106,62 @@ class JobAssignment(BaseModel):
         description="Step to retry scheduling. Required if decision=defer. Must be within job sla_end."
     )
 
+class K8sMetadata(BaseModel):
+    name: str
+    namespace: Optional[str] = "default"
+    labels: Dict[str, str] = Field(default_factory=dict)
+    annotations: Dict[str, str] = Field(default_factory=dict)
+
+class K8sNodeSpec(BaseModel):
+    # Standard Node spec is complex; we use a basic version or Dict
+    taints: Optional[List[dict]] = None
+    unschedulable: Optional[bool] = None
+
+class K8sContainer(BaseModel):
+    name: str
+    image: str
+    resources: dict
+    # Optional fields
+    command: Optional[List[str]] = None
+    args: Optional[List[str]] = None
+    env: Optional[List[dict]] = None
+    ports: Optional[List[dict]] = None
+
+class K8sPodSpec(BaseModel):
+    nodeName: Optional[str] = None
+    containers: List[K8sContainer] = Field(..., description="List of containers in the pod")
+    volumes: Optional[List[dict]] = None
+
+class K8sNode(BaseModel):
+    apiVersion: str = "v1"
+    kind: str = "Node"
+    metadata: K8sMetadata
+    spec: Optional[K8sNodeSpec] = None
+    # status is usually injected by the KWOK adapter, but included here for completeness
+    status: Optional[dict] = None
+
+class K8sPod(BaseModel):
+    apiVersion: str = "v1"
+    kind: str = "Pod"
+    metadata: K8sMetadata
+    spec: K8sPodSpec
+    status: Optional[dict] = None
+
+# Union type for the list items expected by create_from_dict
+K8sResource = Union[K8sNode, K8sPod]
+
+class DeleteNode(BaseModel):
+    kind: str = "Node"
+    name: str
+
+class DeletePod(BaseModel):
+    kind: str = "Pod"
+    name: str
+
+# Union type for the list items expected by delete_from_dict
+DeleteResource = Union[DeleteNode, DeletePod]
+
+
 class Ko2cubeAction(Action):
     """
     The action the agent provides. 
@@ -106,6 +171,15 @@ class Ko2cubeAction(Action):
         ..., 
         description="List of decisions for the jobs in the queue."
     )
+    resources_to_delete: Dict[str, List[DeleteResource]] = Field(
+        default_factory=dict,
+        description="List of resources(nodes/pods) to delete per region."
+    )
+    resources_to_create: Dict[str, List[K8sResource]] = Field(
+        default_factory=dict,
+        description="List of resources(nodes/pods) to create per region."
+    )
+        
 
 # Internal State Model
 class Ko2cubeState(State):

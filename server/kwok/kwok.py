@@ -10,8 +10,8 @@ from ko2cube.server.kwok.config import (
     validate_pod_resource, get_instance_resources
 )
 
-from .models import K8sResource, K8sNode, K8sPod, DeleteResource, DeleteNode, DeletePod
-from ko2cube.server.kwok.error import KWOKError, NodeValidationError, PodValidationError, InstanceTypeError
+from ko2cube.models import K8sResource, K8sNode, K8sPod, DeleteResource, DeleteNode, DeletePod
+from ko2cube.server.kwok.error import KWOKError
 
 class KWOKAdapter:
     """
@@ -58,9 +58,11 @@ class KWOKAdapter:
             # Use simple print as logging might already be shut down during exit
             print(f"[KWOK] Automatic cleanup failed: {e}")
 
-    def __init__(self):
+    def __init__(self, cluster_prefix: str = None):
         # Register global cleanup to run on process exit
         atexit.register(self.cleanup_all_clusters)
+
+        self.cluster_prefix = cluster_prefix
 
         # Load infrastructure regions
         try:
@@ -75,22 +77,31 @@ class KWOKAdapter:
 
         # Start clusters for each region
         for region in self.regions:
-            print(f"Starting kwok cluster for region: {region}")
+            full_name = self._full_name(region)
+            print(f"Starting kwok cluster: {full_name}")
             try:
-                # kwokctl create cluster --name <region>
+                # kwokctl create cluster --name <full_name>
                 # Use check=False to avoid crashing if cluster already exists
-                subprocess.run(["kwokctl", "create", "cluster", "--name", region], check=False)
-                self.active_clusters.append(region)
+                subprocess.run(["kwokctl", "create", "cluster", "--name", full_name], check=False)
+                self.active_clusters.append(full_name)
             except Exception as e:
                 print(f"Failed to start cluster {region}: {e}")
 
+    def _full_name(self, region: str) -> str:
+        """Helper to map a region name to its prefixed cluster name."""
+        if self.cluster_prefix:
+            return f"{self.cluster_prefix}-{region}"
+        return region
+
     def cleanup(self):
         """Manually trigger the deletion of all clusters tracked by this adapter."""
-        KWOKAdapter.cleanup_all_clusters()
+        for cluster in self.active_clusters:
+             subprocess.run(["kwokctl", "delete", "cluster", "--name", cluster], check=False)
         self.active_clusters = []
 
-    def delete_cluster(self, cluster_name: str):
-        """Delete a specific cluster by name."""
+    def delete_cluster(self, region: str):
+        """Delete a specific cluster by region name."""
+        cluster_name = self._full_name(region)
         try:
             print(f"Deleting kwok cluster: {cluster_name}")
             subprocess.run(["kwokctl", "delete", "cluster", "--name", cluster_name], check=True)
@@ -156,8 +167,9 @@ class KWOKAdapter:
                 print(f"Error listing nodes in cluster {cluster}: {e}")
         return all_nodes
 
-    def delete_pod(self, pod_name: str, cluster_name: str) -> bool:
-        """Delete a pod from the specified cluster."""
+    def delete_pod(self, pod_name: str, region: str) -> bool:
+        """Delete a pod from the specified regional cluster."""
+        cluster_name = self._full_name(region)
         self._load_config(cluster_name)
         v1 = client.CoreV1Api()
         try:
@@ -168,8 +180,9 @@ class KWOKAdapter:
             print(f"Failed to delete pod {pod_name} in cluster {cluster_name}: {e}")
             return False
 
-    def delete_node(self, node_name: str, cluster_name: str) -> bool:
-        """Delete a node from the specified cluster."""
+    def delete_node(self, node_name: str, region: str) -> bool:
+        """Delete a node from the specified regional cluster."""
+        cluster_name = self._full_name(region)
         self._load_config(cluster_name)
         v1 = client.CoreV1Api()
         try:
@@ -219,9 +232,9 @@ class KWOKAdapter:
             validate_pod_resource(res, active_node_names)
             utils.create_from_dict(k8s_client, res)
 
-    def create_from_dict(self, data: List[Union[dict, K8sResource]], cluster_name: str):
+    def create_from_dict(self, data: List[K8sResource], region: str):
         """
-        Create resources from a list in the specified cluster.
+        Create resources from a list in the specified regional cluster.
 
         Accepts a mixed list of raw dicts or Pydantic K8sNode/K8sPod models.
         Resources are automatically segregated by type, then Nodes are validated,
@@ -230,6 +243,7 @@ class KWOKAdapter:
         if not isinstance(data, list):
             raise ValueError("Input data must be a list of dicts or K8sNode/K8sPod models")
 
+        cluster_name = self._full_name(region)
         self._load_config(cluster_name)
         k8s_client = client.ApiClient()
 
@@ -267,22 +281,23 @@ class KWOKAdapter:
             print(f"[KWOK] Failed to create resources in cluster '{cluster_name}': {e}")
             raise
 
-    def delete_from_dict(self, data: List[Union[dict, DeleteResource]], cluster_name: str):
+    def delete_from_dict(self, data: List[DeleteResource], region: str):
         """
-        Delete resources from a cluster using a list of dicts or DeleteResource models.
+        Delete resources from a regional cluster using a list of dicts or DeleteResource models.
         """
         if not isinstance(data, list):
             raise ValueError("Input data must be a list of dicts or DeleteResource models")
 
+        cluster_name = self._full_name(region)
         self._load_config(cluster_name)
 
         print(f"[KWOK] Deleting resources from cluster '{cluster_name}'...")
         for item in data:
             try:
                 if isinstance(item, DeleteNode):
-                    self.delete_node(item.name, cluster_name)
+                    self.delete_node(item.name, region)
                 elif isinstance(item, DeletePod):
-                    self.delete_pod(item.name, cluster_name)
+                    self.delete_pod(item.name, region)
                 else:
                     raise KWOKError(f"Unsupported delete type: {type(item).__name__}")
             except Exception as e:
