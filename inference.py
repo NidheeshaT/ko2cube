@@ -66,7 +66,7 @@ TASK_NAME = os.getenv("MY_ENV_V4_TASK", "ko2cube")
 BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "ko2cube")
 MAX_STEPS = 4
 TEMPERATURE = 0.7
-MAX_TOKENS = 750
+MAX_TOKENS = 1500
 SUCCESS_SCORE_THRESHOLD = 0.1
 MAX_TOTAL_REWARD = 60.0 # Ceiling for normalization in [END] line
 TASKS = ["easy", "medium", "hard"]
@@ -207,7 +207,8 @@ async def get_model_message(client: AsyncOpenAI, step: int, obs: dict, last_rewa
                 temperature=0.1, # Conservative for scheduling
                 max_tokens=MAX_TOKENS,
                 reasoning_effort="none",
-                response_format=Ko2cubeAction
+                response_format=Ko2cubeAction,
+                timeout=30
             )
             
             # Validation
@@ -304,7 +305,7 @@ async def run_episode(client: AsyncOpenAI, base_url: str, task_id: str) -> List[
 
 async def main() -> None:
     """Main entry point running tasks in parallel using a shared container."""
-    client = AsyncOpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN, timeout=15.0)
+    client = AsyncOpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN, timeout=30.0)
 
     print(f"🚀 Starting Ko2cube Inference Baseline (Parallel Shared)", flush=True, file=sys.stderr)
     print(f"📡 API: {API_BASE_URL} | Model: {MODEL_NAME}", flush=True, file=sys.stderr)

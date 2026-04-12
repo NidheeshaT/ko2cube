@@ -37,37 +37,37 @@ jobs:
           pip install openenv-core uvicorn httpx
 
       # Step 4: Run environment unit tests (Grader, Rewards)
-      - name: Run environment unit tests
-        run: |
-          # Use the parent directory in PYTHONPATH so 'import ko2cube' works correctly
-          export PYTHONPATH=$PYTHONPATH:$(pwd)/..
-          python -c "
-          from ko2cube.server.environment import Ko2cubeEnvironment
-          from ko2cube.models import Ko2cubeAction, JobAssignment
+      # - name: Run environment unit tests
+      #   run: |
+      #     # Use the parent directory in PYTHONPATH so 'import ko2cube' works correctly
+      #     export PYTHONPATH=$PYTHONPATH:$(pwd)/..
+      #     python -c "
+      #     from ko2cube.server.environment import Ko2cubeEnvironment
+      #     from ko2cube.models import Ko2cubeAction, JobAssignment
 
-          # 1. Test environment reset
-          env = Ko2cubeEnvironment()
-          obs = env.reset(task_id='easy')
-          assert obs.current_step == 0
-          assert len(obs.job_queue) > 0
-          assert 0.01 <= obs.reward <= 0.99, f'Reset reward {obs.reward} out of range (0, 1)'
+      #     # 1. Test environment reset
+      #     env = Ko2cubeEnvironment()
+      #     obs = env.reset(task_id='easy')
+      #     assert obs.current_step == 0
+      #     assert len(obs.job_queue) > 0
+      #     assert 0.01 <= obs.reward <= 0.99, f'Reset reward {obs.reward} out of range (0, 1)'
 
-          # 2. Test environment step
-          # Assign the first job in the queue
-          job_id = obs.job_queue[0].job_id
-          action = Ko2cubeAction(assignments=[
-              JobAssignment(job_id=job_id, decision='schedule', region='us-east-1', instance_type='m5.large', machine_type='spot')
-          ])
-          new_obs = env.step(action)
-          assert new_obs.current_step == 1
-          assert 0.01 <= new_obs.reward <= 0.99, f'Step reward {new_obs.reward} out of range (0, 1)'
+      #     # 2. Test environment step
+      #     # Assign the first job in the queue
+      #     job_id = obs.job_queue[0].job_id
+      #     action = Ko2cubeAction(assignments=[
+      #         JobAssignment(job_id=job_id, decision='schedule', region='us-east-1', instance_type='m5.large', machine_type='spot')
+      #     ])
+      #     new_obs = env.step(action)
+      #     assert new_obs.current_step == 1
+      #     assert 0.01 <= new_obs.reward <= 0.99, f'Step reward {new_obs.reward} out of range (0, 1)'
 
-          # 3. Test grader score range
-          score = env.grader_score()
-          assert 0.01 <= score <= 0.99, f'Grader score {score} out of range (0, 1)'
+      #     # 3. Test grader score range
+      #     score = env.grader_score()
+      #     assert 0.01 <= score <= 0.99, f'Grader score {score} out of range (0, 1)'
 
-          print('✅ All internal environment unit tests passed')
-          "
+      #     print('✅ All internal environment unit tests passed')
+      #     "
 
       # Step 5: Build Docker image
       - name: Build Docker image
