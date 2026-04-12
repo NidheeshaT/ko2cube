@@ -16,7 +16,6 @@ tags:
 
 Live environment: [Hugging Face Space](https://huggingface.co/spaces/nagarajpandith/ko2cube)
 
-
 ## The Problem
 
 Cloud computing accounts for roughly 1–2% of global electricity consumption, but data centres do not have to run at full carbon cost all day. The grid is cleaner at certain hours (when solar peaks, for instance) and dirtier at others (evening fossil-fuel demand). A job that runs at noon in a solar-heavy region produces a fraction of the CO2 of the same job running at midnight on coal.
@@ -71,6 +70,29 @@ The per-step reward is dense and interpretable. Every decision the agent makes p
 
 At episode end, a terminal reward layer looks at overall completion rate, the agent's cumulative carbon versus baseline, and cost versus baseline.
 
+## What the Agent Controls
+
+Ko2cube provides a "Full-Stack" control plane. The agent doesn't just manage a job queue; it actively orchestrates the underlying Kubernetes infrastructure using a built-in **KWOK** (Kubernetes Without Kubelet) adapter.
+
+### 1. Workload Scheduling
+
+At every simulation step, the agent makes decisions for jobs in the queue:
+
+- `schedule`: Deploy the workload immediately.
+- `defer`: Wait for a cleaner/cheaper carbon window.
+- `drop`: Cancel the job permanently (SLA penalty).
+
+### 2. Infrastructure Orchestration (New)
+
+The agent has direct control over the cluster topology across all regions:
+
+- `resources_to_create`: Dynamically provision new **K8s Nodes** or **Pods** to handle bursts.
+- `resources_to_delete`: Tear down idle or inefficient infrastructure to save on "Always-On" carbon and costs.
+
+The agent receives a unified observation including a 24-hour carbon forecast, spot pricing, and the current **K8s Cluster State** (Nodes/Pods) for every regional data center.
+
+---
+
 ## What Makes It Technically Interesting
 
 **Grid-aware baselines.** The reward does not compare agents to a fixed number. It computes a personal baseline per job — the average carbon intensity and average spot price across the job's entire allowed SLA window, across all available regions. This means an agent that happens to get a "lucky" clean grid still has to beat its own relevant baseline to earn carbon rewards.
@@ -78,8 +100,6 @@ At episode end, a terminal reward layer looks at overall completion rate, the ag
 **Eight distinct workload archetypes.** Each job type is defined with realistic resource profiles: ETL pipelines (4 vCPU, 16 GB, 45 min runs), ML training (GPU-heavy, 4-hour duration), CI/CD builds (8 vCPU, 12-minute deadline, cannot wait), API serving (always-on, on-demand only), and more. The hard scenario runs all eight simultaneously.
 
 **Expiry penalty.** When a job's last eligible step passes and the agent said nothing about it, an immediate SLA breach penalty fires at that step rather than being buried in the terminal reward. This gives the LLM agent a dense, well-timed training signal.
-
-**KWOK integration.** The environment is backed by [KWOK](https://kwok.sigs.k8s.io/) (Kubernetes Without Kubelet), a lightweight cluster simulator. When a job finishes, the environment calls the KWOK adapter to delete the corresponding pod from the simulated regional cluster. If the deletion fails for any reason — network, validation, pod already removed — the error is caught, logged, tracked in episode state, and converted into an immediate reward penalty.
 
 ---
 
@@ -147,6 +167,16 @@ export HF_TOKEN="your_token_here"
 
 python inference.py
 ```
+
+## Future Scope
+
+Our roadmap includes:
+
+- **Real-time Infrastructure Sync**: Beyond synthetic data, we plan to integrate live APIs from **WattTime** (real-time grid carbon intensity) and live **Spot Instance** pricing feeds for production-grade decision making.
+- **Data Gravity & Egress Optimization**: Incorporating the energy and financial cost of inter-region data movement (egress), ensuring that "green" scheduling isn't offset by high network carbon footprints.
+- **Karpenter-Native Intelligence**: Building upon and extending **Karpenter** - the industry-leading Kubernetes autoscaler - to inject carbon-awareness into its native cost-optimization engine.
+- **Reasoning-Based Evaluation**: Implementing **Reasoning Text Based Rewards**, where the environment evaluates the "Logic" behind an agent's decision using LLM-as-a-Grader to ensure decisions are justifiable, not just lucky.
+- **Multi-Cloud Global Arbitrage**: Expanding the infrastructure substrate to include GCP and Azure regions, allowing the agent to arbitrage carbon and cost across the entire global cloud market.
 
 ## CI/CD
 
