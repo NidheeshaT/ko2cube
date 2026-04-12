@@ -49,6 +49,10 @@ DEFER_CLEAN_ALREADY_PENALTY = -0.3  # deferred when carbon is already below aver
 COST_REWARD_SCALE        = 1.0    # multiplier on fractional saving below regional average
 RIGHT_SIZING_WASTE_SCALE = 1.5    # multiplier on the dollar amount wasted (vs cheapest valid instance)
 
+# KWOK infrastructure penalty
+# Each time the simulated cluster fails to delete a finished pod it means - the real cluster is out of sync - we treat it like an ops incident
+KWOK_ERROR_PENALTY       = -0.5   # deducted per failed pod/node delete in a step
+
 # Terminal multipliers
 TERMINAL_COMPLETION_BONUS  = +3.0
 TERMINAL_CARBON_BONUS_MAX  = +2.0

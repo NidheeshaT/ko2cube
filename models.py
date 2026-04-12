@@ -126,5 +126,7 @@ class Ko2cubeState(State):
     sla_violations: int = Field(default=0, description="Total number of SLA violations")
     jobs_completed: int = Field(default=0, description="Number of successfully completed jobs")
     jobs_dropped: int = Field(default=0, description="Number of dropped jobs")
+    # tracks how many times KWOK cluster failed to delete a pod when a job finished
+    kwok_errors: int = Field(default=0, description="Cumulative count of KWOK infrastructure errors (failed pod/node operations)")
     step_duration_minutes: int = Field(default=60, description="Simulation time per step")
     is_done: bool = Field(default=False)
