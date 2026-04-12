@@ -49,6 +49,10 @@ DEFER_CLEAN_ALREADY_PENALTY = -0.3  # deferred when carbon is already below aver
 COST_REWARD_SCALE        = 1.0    # multiplier on fractional saving below regional average
 RIGHT_SIZING_WASTE_SCALE = 1.5    # multiplier on the dollar amount wasted (vs cheapest valid instance)
 
+# KWOK infrastructure penalty
+# Each time the simulated cluster fails to delete a finished pod it means - the real cluster is out of sync - we treat it like an ops incident
+KWOK_ERROR_PENALTY       = -0.5   # deducted per failed pod/node delete in a step
+
 # Terminal multipliers
 TERMINAL_COMPLETION_BONUS  = +3.0
 TERMINAL_CARBON_BONUS_MAX  = +2.0
@@ -119,14 +123,27 @@ def actual_carbon(job: Job, assignment: JobAssignment, regions: Dict[str, Region
 # Potential-based shaping
 def _potential(state: Ko2cubeState) -> float:
     """
-    φ(s) - Progress potential. Fraction of jobs that have been completed.
-    Increases toward 1.0 as jobs finish within SLA.
+    φ(s) - Progress potential based on jobs completed WITHOUT an SLA violation.
+    We deliberately exclude jobs that were scheduled late (after their sla_end)
+    so the shaping bonus only fires when the agent does the *right* thing.
     Returns 0.0 if no jobs exist.
     """
     total = len(state.all_jobs)
     if total == 0:
         return 0.0
-    return state.jobs_completed / total
+    # Count only jobs that finished AND did not miss their SLA window
+    on_time_completed = sum(
+        1 for j in state.all_jobs.values()
+        if j.status == "completed" and j.sla_end != ALWAYS_ON
+        and j.completion_step is not None
+        and j.completion_step <= j.sla_end
+    )
+    # Always-on jobs that are running also count toward good progress
+    always_on_running = sum(
+        1 for j in state.all_jobs.values()
+        if j.sla_end == ALWAYS_ON and j.status in ("running", "completed")
+    )
+    return (on_time_completed + always_on_running) / total
 
 
 # Reward breakdown dataclass
@@ -167,22 +184,27 @@ def compute_step_reward(
     state: Ko2cubeState,
     phi_before: float,
     phi_after: float,
+    current_step: int = 0,  # The step *before* state.current_step was incremented
 ) -> RewardBreakdown:
     """
     Compute the reward for one step's batch of assignments.
 
     Parameters
     ----------
-    assignments : Agent's decisions for this step
-    queue       : Jobs that were in the queue at the start of this step
-    regions     : Current region data (carbon + pricing)
-    state       : Current simulator state (mutated - for metadata/counts)
-    phi_before  : Potential φ(s) BEFORE state was mutated
-    phi_after   : Potential φ(s') AFTER state was mutated
+    assignments  : Agent's decisions for this step
+    queue        : Jobs that were in the queue at the start of this step
+    regions      : Current region data (carbon + pricing)
+    state        : Current simulator state (mutated - for metadata/counts)
+    phi_before   : Potential φ(s) BEFORE state was mutated
+    phi_after    : Potential φ(s') AFTER state was mutated
+    current_step : The simulator step number this reward is computed FOR.
+                   Must be passed explicitly to avoid an off-by-one error.
     """
     rb = RewardBreakdown()
     job_map: Dict[str, Job] = {j.job_id: j for j in queue}
-    current_step = state.current_step - 1 # Rewards reference the step just completed
+    # NOTE: We use the explicitly passed current_step, NOT state.current_step.
+    # By the time this function runs, state.current_step still equals the
+    # pre-increment value, so we trust the caller to pass it correctly.
 
 
     # Per-assignment SLA + Carbon + Cost-
@@ -300,7 +322,22 @@ def compute_step_reward(
                     rb.sla += ALWAYS_ON_SPOT_PENALTY
                     rb.components[f"always_on_spot_{job.job_id}"] = ALWAYS_ON_SPOT_PENALTY
 
-    # Shaping (delta-potential)
+    # --- Penalty for simply ignoring a job until its SLA expires ---
+    # If a job was sitting in the queue this step and its SLA deadline is NOW,
+    # the agent missed its last chance to act. Penalise it here so the signal
+    # is immediate rather than buried in the terminal reward.
+    assigned_ids = {a.job_id for a in assignments}
+    for job in queue:
+        if (
+            job.job_id not in assigned_ids          # agent said nothing about this job
+            and job.sla_end != ALWAYS_ON            # only finite-deadline jobs
+            and job.sla_end == current_step         # deadline is exactly THIS step
+            and job.status not in ("completed", "sla_missed", "dropped")
+        ):
+            rb.sla += SLA_BREACH_PENALTY
+            rb.components[f"ignored_expiry_{job.job_id}"] = SLA_BREACH_PENALTY
+
+    # Shaping (delta-potential): rewards the agent for making real forward progress
     rb.shaping = phi_after - phi_before
 
     return rb

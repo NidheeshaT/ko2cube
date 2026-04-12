@@ -21,6 +21,9 @@ from ko2cube.server.rewards import (
     actual_carbon, actual_cost,
 )
 from ko2cube.server.data.scenarios import get_scenario, Scenario
+from ko2cube.server.rewards import KWOK_ERROR_PENALTY
+from ko2cube.server.kwok.kwok import KWOKAdapter
+from ko2cube.server.kwok.error import KWOKError
 
 class Ko2cubeEnvironment(Environment):
     """
@@ -55,6 +58,7 @@ class Ko2cubeEnvironment(Environment):
         self._active_jobs: List[RunningJob] = []
         self._deferred: Dict[str, int] = {} # job_id -> step to retry
         self._state = self._init_state()
+        self._kwok = KWOKAdapter()
 
     def _init_state(self) -> Ko2cubeState:
         return Ko2cubeState(
@@ -159,6 +163,7 @@ class Ko2cubeEnvironment(Environment):
 
         # 2. Tick active jobs
         still_running = []
+        kwok_errors_this_step = 0  # count pod deletions that failed this step
         for rj in self._active_jobs:
             rj.steps_remaining -= 1
             if rj.steps_remaining <= 0:
@@ -167,6 +172,19 @@ class Ko2cubeEnvironment(Environment):
                     original.status = "completed"
                     original.completion_step = current_step
                 self._state.jobs_completed += 1
+
+                # command KWOK to delete the finished pod from the simulated cluster
+                try:
+                    self._kwok.delete_pod(rj.job_id, rj.region)
+                    result_parts.append(f"{rj.job_id}: pod deleted from KWOK cluster '{rj.region}'")
+                except KWOKError as e:
+                    kwok_errors_this_step += 1
+                    self._state.kwok_errors += 1
+                    result_parts.append(f"{rj.job_id}: KWOK pod deletion failed [{type(e).__name__}]: {e}")
+                except Exception as e:
+                    kwok_errors_this_step += 1
+                    self._state.kwok_errors += 1
+                    result_parts.append(f"{rj.job_id}: KWOK pod deletion error: {e}")
             else:
                 still_running.append(rj)
         self._active_jobs = still_running
@@ -182,14 +200,23 @@ class Ko2cubeEnvironment(Environment):
         # 4. Reward & Potential Computation
         phi_after = _potential(self._state)
         # We pass both potentials to ensure accurate marginal reward computation
+        # Pass current_step explicitly — state.current_step hasn't been incremented yet
+        # so it equals the step we just processed. This prevents an off-by-one in SLA checks.
         rb = compute_step_reward(
             assignments=action.assignments,
             queue=queue_snapshot,
             regions=regions,
             state=self._state,
             phi_before=phi_before,
-            phi_after=phi_after
+            phi_after=phi_after,
+            current_step=current_step,
         )
+
+        # apply a penalty for each KWOK pod deletion that failed this step
+        if kwok_errors_this_step > 0:
+            kwok_penalty = kwok_errors_this_step * KWOK_ERROR_PENALTY
+            rb.sla += kwok_penalty
+            rb.components[f"kwok_errors_x{kwok_errors_this_step}"] = round(kwok_penalty, 4)
 
         # 5. Transition to next step
         self._state.current_step += 1
